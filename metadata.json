@@ -1,0 +1,5 @@
+{
+  "name": "AI CV Maker",
+  "description": "A React application for building and styling CVs with AI-powered content generation using Gemini API.",
+  "requestFramePermissions": []
+}

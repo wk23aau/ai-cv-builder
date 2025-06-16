@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gemini CV Theme Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              // Allows dynamic primary/secondary colors if needed, but not strictly necessary with full class names
+              // For example: 'primary': 'var(--color-primary)',
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'], // Example, ensure fonts are loaded or use system defaults
+              serif: ['Georgia', 'serif'],
+              mono: ['Menlo', 'monospace'],
+            }
+          }
+        },
+        // Safelist dynamic classes if they are constructed in a way Tailwind JIT cannot detect
+        // For CVPreview, colors like bg-blue-600, text-gray-700 etc. are dynamically used.
+        // It's better to ensure Tailwind can "see" these classes.
+        // If Tailwind is loaded via CDN and classes are purely dynamic from JS, 
+        // they might not be generated. However, using full class strings like `bg-${theme.primaryColor}`
+        // is generally fine as long as `theme.primaryColor` resolves to a known Tailwind color name like `blue-600`.
+        // The current implementation directly uses strings like 'blue-600', 'gray-700' so it should be fine.
+        // Adding a safelist for all possible color-shade combinations used can be a robust way.
+        safelist: [
+          // All colors used in AVAILABLE_THEMES and for customization
+          ...[
+            'slate', 'gray', 'zinc', 'neutral', 'stone', 'red', 'orange', 'amber', 'yellow',
+            'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose'
+          ].flatMap(color => [
+            ...['100', '200', '300', '400', '500', '600', '700', '800', '900'].flatMap(weight => [
+              `bg-${color}-${weight}`,
+              `text-${color}-${weight}`,
+              `border-${color}-${weight}`,
+              `ring-${color}-${weight}`,
+              `hover:bg-${color}-${weight}`,
+              `hover:text-${color}-${weight}`,
+              `hover:border-${color}-${weight}`,
+            ]),
+            // For cases without a weight (e.g., text-black)
+            `bg-${color}`,
+            `text-${color}`,
+            `border-${color}`,
+            `ring-${color}`,
+            `hover:bg-${color}`,
+            `hover:text-${color}`,
+            `hover:border-${color}`,
+          ]),
+          'bg-white', 'text-black', 'bg-gray-50', 'bg-opacity-10', // Other specific colors
+          'font-sans', 'font-serif', 'font-mono', // Font families
+        ],
+      }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Georgia&family=Menlo&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" integrity="sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.5.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-slate-100">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
