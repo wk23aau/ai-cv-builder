@@ -1,0 +1,76 @@
+/* Admin styles for Gemini CV Builder */
+
+.gcb-shortcode-info {
+    background: #f1f1f1;
+    padding: 20px;
+    margin-top: 30px;
+    border-radius: 5px;
+}
+
+.gcb-shortcode-info code {
+    background: #fff;
+    padding: 5px 10px;
+    border-radius: 3px;
+    font-size: 14px;
+}
+
+.gcb-shortcode-info ul {
+    list-style: disc;
+    margin-left: 20px;
+    margin-top: 10px;
+}
+
+.gcb-shortcode-info li {
+    margin-bottom: 10px;
+}
+
+/* Modal styles for viewing saved CVs */
+#gcb-cv-modal {
+    position: fixed;
+    z-index: 100000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: none;
+}
+
+.gcb-modal-content {
+    background-color: #fefefe;
+    margin: 5% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 800px;
+    max-height: 80vh;
+    overflow-y: auto;
+    position: relative;
+    border-radius: 5px;
+}
+
+.gcb-close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    line-height: 20px;
+}
+
+.gcb-close:hover,
+.gcb-close:focus {
+    color: #000;
+    text-decoration: none;
+}
+
+#gcb-cv-data {
+    margin-top: 20px;
+}
+
+#gcb-cv-data pre {
+    background: #f4f4f4;
+    padding: 15px;
+    border-radius: 3px;
+    overflow-x: auto;
+}

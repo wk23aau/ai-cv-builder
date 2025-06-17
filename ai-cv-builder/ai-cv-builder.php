@@ -345,39 +345,34 @@ function aicvb_handle_generate_initial_cv_ajax() {
     }
 
     // Construct a more detailed prompt asking for JSON output
-    // This prompt is based on the structure seen in the original React app's geminiService.ts
-    // for 'initial_cv_from_title' or 'initial_cv_from_job_description'
     $prompt_text = "";
     if ($input_type === 'title') {
-        $prompt_text = "Based on the job title: \"{$input_value}\", generate a comprehensive CV structure.
+        $prompt_text = 'Based on the job title: "' . $input_value . '", generate a comprehensive CV structure.
 The CV should include:
-1.  PersonalInfo: A JSON object with fields: \"name\" (string, set to \"Your Name (Update Me!)\"), \"title\" (string, set to the provided job title \"{$input_value}\"), \"phone\" (string, empty), \"email\" (string, empty), \"linkedin\" (string, empty), \"github\" (string, empty), \"portfolio\" (string, empty), \"address\" (string, empty).
-2.  Summary: A professional summary of 2-3 sentences relevant to the job title.
-3.  Experience: One sample experience entry. Include 'jobTitle', 'company', 'location', 'startDate', 'endDate', and 2-3 'responsibilities' (bullet points).
-4.  Education: One sample education entry. Include 'degree', 'institution', 'location', 'graduationDate', and 1-2 'details'.
-5.  Skills: One skill entry with a 'category' and a 'skills' array with 3-4 relevant skills.
+1. PersonalInfo: A JSON object with fields: "name" (string, set to "Your Name (Update Me!)"), "title" (string, set to the provided job title "' . $input_value . '"), "phone" (string, empty), "email" (string, empty), "linkedin" (string, empty), "github" (string, empty), "portfolio" (string, empty), "address" (string, empty).
+2. Summary: A professional summary of 2-3 sentences relevant to the job title.
+3. Experience: One sample experience entry. Include \'jobTitle\', \'company\', \'location\', \'startDate\', \'endDate\', and 2-3 \'responsibilities\' (bullet points).
+4. Education: One sample education entry. Include \'degree\', \'institution\', \'location\', \'graduationDate\', and 1-2 \'details\'.
+5. Skills: One skill entry with a \'category\' and a \'skills\' array with 3-4 relevant skills.
 Respond ONLY with a single JSON object matching this structure: 
-{\"personalInfo\": {\"name\": \"\", \"title\": \"\", ...}, \"summary\": \"\", \"experience\": [{\"jobTitle\": \"\", ...}], \"education\": [{\"degree\": \"\", ...}], \"skills\": [{\"category\": \"\", \"skills\": []}] }
-Ensure all string fields are populated appropriately based on the job title. Do not include 'id' fields.";
+{"personalInfo": {"name": "", "title": "", "phone": "", "email": "", "linkedin": "", "github": "", "portfolio": "", "address": ""}, "summary": "", "experience": [{"jobTitle": "", "company": "", "location": "", "startDate": "", "endDate": "", "responsibilities": []}], "education": [{"degree": "", "institution": "", "location": "", "graduationDate": "", "details": []}], "skills": [{"category": "", "skills": []}]}
+Ensure all string fields are populated appropriately based on the job title. Do not include \'id\' fields.';
     } else { // 'description'
-        $prompt_text = "Based on the following Job Description:
+        $prompt_text = 'Based on the following Job Description:
 ---
-{$input_value}
+' . $input_value . '
 ---
 Generate a comprehensive foundational CV structure. Extract the core job title from the Job Description for the PersonalInfo.title field.
 The CV MUST include:
-1.  PersonalInfo: A JSON object with fields: \"name\" (string, set to \"Your Name (Update Me!)\"), \"title\" (string, set to the extracted core job title), \"phone\" (string, empty), \"email\" (string, empty), \"linkedin\" (string, empty), \"github\" (string, empty), \"portfolio\" (string, empty), \"address\" (string, empty).
-2.  Summary: A professional summary (2-3 sentences) highly relevant to the Job Description.
-3.  Experience: One or two sample experience entries aligned with the JD. Each entry MUST include: 'jobTitle', 'company', 'location', 'startDate', 'endDate', and 2-3 'responsibilities'.
-4.  Education: One sample education entry. Include 'degree', 'institution', 'location', 'graduationDate', and 1-2 'details'.
-5.  Skills: One to two skill entries. Each with a 'category' and a 'skills' array with 3-5 skills directly extracted or inferred from the Job Description.
-Respond ONLY with a single JSON object matching the structure described above. Do not include 'id' fields.";
+1. PersonalInfo: A JSON object with fields: "name" (string, set to "Your Name (Update Me!)"), "title" (string, set to the extracted core job title), "phone" (string, empty), "email" (string, empty), "linkedin" (string, empty), "github" (string, empty), "portfolio" (string, empty), "address" (string, empty).
+2. Summary: A professional summary (2-3 sentences) highly relevant to the Job Description.
+3. Experience: One or two sample experience entries aligned with the JD. Each entry MUST include: \'jobTitle\', \'company\', \'location\', \'startDate\', \'endDate\', and 2-3 \'responsibilities\'.
+4. Education: One sample education entry. Include \'degree\', \'institution\', \'location\', \'graduationDate\', and 1-2 \'details\'.
+5. Skills: One to two skill entries. Each with a \'category\' and a \'skills\' array with 3-5 skills directly extracted or inferred from the Job Description.
+Respond ONLY with a single JSON object matching the structure described above. Do not include \'id\' fields.';
     }
     
     // Configuration to request JSON output from Gemini API
-    // This might vary based on the specific Gemini model being used.
-    // Some models prefer this in `generationConfig`, others might infer from a well-structured prompt.
-    // The 'gemini-1.5-flash-latest' model supports response_mime_type.
     $generation_config = array_merge(AICVB_DEFAULT_GENERATION_CONFIG, ['responseMimeType' => 'application/json']);
 
     $api_response = aicvb_call_gemini_api( $prompt_text, $generation_config, AICVB_DEFAULT_SAFETY_SETTINGS );
@@ -426,5 +421,3 @@ Respond ONLY with a single JSON object matching the structure described above. D
 add_action( 'wp_ajax_aicvb_generate_initial_cv', 'aicvb_handle_generate_initial_cv_ajax' );
 // If you want to allow non-logged-in users (not typical for this kind of feature):
 // add_action( 'wp_ajax_nopriv_aicvb_generate_initial_cv', 'aicvb_handle_generate_initial_cv_ajax' );
-
-[end of ai-cv-builder/ai-cv-builder.php]

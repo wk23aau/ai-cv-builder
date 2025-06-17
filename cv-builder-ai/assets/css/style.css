@@ -1,0 +1,58 @@
+/* WordPress-specific styles for Gemini CV Builder */
+
+.gcb-container {
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 20px 0;
+}
+
+.gcb-loading {
+    text-align: center;
+    padding: 50px;
+}
+
+.gcb-spinner {
+    display: inline-block;
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #3498db;
+    border-radius: 50%;
+    animation: gcb-spin 1s linear infinite;
+}
+
+@keyframes gcb-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.gcb-error {
+    background-color: #f8d7da;
+    color: #721c24;
+    padding: 15px;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    margin: 20px 0;
+}
+
+/* Override theme styles that might conflict with WordPress themes */
+.gcb-container * {
+    box-sizing: border-box;
+}
+
+.gcb-container button,
+.gcb-container input,
+.gcb-container textarea,
+.gcb-container select {
+    font-family: inherit;
+}
+
+/* Ensure proper display in various WordPress themes */
+.entry-content .gcb-container {
+    max-width: none;
+}
+
+#gcb-root {
+    position: relative;
+    z-index: 1;
+}

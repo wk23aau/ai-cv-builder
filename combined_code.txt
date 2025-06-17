@@ -1,0 +1,2010 @@
+```bash
+App.tsx
+
+
+
+import React, { useState, useCallback, useEffect, startTransition } from 'react';
+import { CVData, ThemeOptions, GeminiRequestStatus, AutofillTarget, ExperienceEntry, CVSection, SkillEntry, EducationEntry, TailoredCVUpdate, SectionContentType as SectionGenType } from './types'; // Renamed SectionContentType to avoid conflict
+import { INITIAL_CV_DATA, DEFAULT_THEME, PaletteIcon, DocumentTextIcon, DownloadIcon, SparklesIcon, WandSparklesIcon } from './constants';
+import CVPreview from './components/CVPreview';
+import ThemeSelectorPanel from './components/panels/ThemeSelectorPanel';
+import ContentEditorPanel from './components/panels/ContentEditorPanel';
+import LoadingSpinner from './components/shared/LoadingSpinner';
+import ErrorMessage from './components/shared/ErrorMessage';
+import { generateCVContent } from './services/geminiService';
+
+declare var html2pdf: any; 
+
+type ActivePanel = 'theme' | 'content';
+type InitialInputType = 'title' | 'description';
+
+interface InitialCVGeneratorProps {
+    onCvGenerated: (generatedData: CVData) => void;
+    onGenerationError: (errorMessage: string) => void;
+    isLoading: boolean;
+    triggerGeneration: (inputValue: string, inputType: InitialInputType) => Promise<void>;
+}
+
+const InitialCVGenerator: React.FC<InitialCVGeneratorProps> = ({ onCvGenerated, onGenerationError, isLoading, triggerGeneration }) => {
+    const [jobTitle, setJobTitle] = useState('');
+    const [jobDescription, setJobDescription] = useState('');
+    const [inputType, setInputType] = useState<InitialInputType>('title');
+    const [localError, setLocalError] = useState<string | null>(null);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const inputValue = inputType === 'title' ? jobTitle : jobDescription;
+        if (!inputValue.trim()) {
+            setLocalError(`Please enter your desired ${inputType === 'title' ? 'job title' : 'job description'}.`);
+            return;
+        }
+        setLocalError(null);
+        await triggerGeneration(inputValue, inputType);
+    };
+
+    return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-slate-100 p-8">
+            <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg text-center">
+                <WandSparklesIcon className="w-16 h-16 text-blue-600 mx-auto mb-6" />
+                <h2 className="text-3xl font-bold text-slate-800 mb-4">Let's Craft Your CV!</h2>
+                <p className="text-slate-600 mb-6">
+                    Start by providing your desired job title or a full job description. Gemini AI will help create a foundational CV for you.
+                </p>
+                
+                <div className="mb-6">
+                    <div className="flex justify-center space-x-4">
+                        {(['title', 'description'] as InitialInputType[]).map((type) => (
+                            <button
+                                key={type}
+                                onClick={() => setInputType(type)}
+                                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors
+                                    ${inputType === type 
+                                        ? 'bg-blue-600 text-white shadow-md' 
+                                        : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}
+                            >
+                                {type === 'title' ? 'Use Job Title' : 'Use Job Description'}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-6">
+                    {inputType === 'title' ? (
+                        <div>
+                            <label htmlFor="jobTitle" className="sr-only">Desired Job Title</label>
+                            <input
+                                type="text"
+                                id="jobTitle"
+                                value={jobTitle}
+                                onChange={(e) => setJobTitle(e.target.value)}
+                                placeholder="e.g., Senior Software Engineer"
+                                className="w-full p-4 border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg transition-shadow"
+                                aria-describedby="jobTitleHelp"
+                            />
+                            <p id="jobTitleHelp" className="text-xs text-slate-500 mt-2">A specific job title helps us generate relevant content.</p>
+                        </div>
+                    ) : (
+                        <div>
+                            <label htmlFor="jobDescription" className="sr-only">Job Description</label>
+                            <textarea
+                                id="jobDescription"
+                                value={jobDescription}
+                                onChange={(e) => setJobDescription(e.target.value)}
+                                placeholder="Paste the full job description here..."
+                                rows={8}
+                                className="w-full p-4 border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base transition-shadow"
+                                aria-describedby="jobDescriptionHelp"
+                            />
+                            <p id="jobDescriptionHelp" className="text-xs text-slate-500 mt-2">A full job description allows for a more tailored CV.</p>
+                        </div>
+                    )}
+                    
+                    {localError && <ErrorMessage message={localError} onClear={() => setLocalError(null)} />}
+                    <button
+                        type="submit"
+                        disabled={isLoading}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-4 px-6 rounded-lg text-lg flex items-center justify-center gap-3 transition-colors duration-150 disabled:opacity-70"
+                    >
+                        {isLoading ? <LoadingSpinner size="w-6 h-6" /> : <SparklesIcon className="w-6 h-6" />}
+                        {isLoading ? 'Generating Your CV...' : 'Generate CV with AI'}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+
+const App: React.FC = () => {
+  const [cvData, setCVData] = useState<CVData>(INITIAL_CV_DATA);
+  const [currentTheme, setCurrentTheme] = useState<ThemeOptions>(DEFAULT_THEME);
+  const [activePanel, setActivePanel] = useState<ActivePanel>('content');
+  const [geminiStatus, setGeminiStatus] = useState<GeminiRequestStatus>(GeminiRequestStatus.IDLE);
+  const [geminiError, setGeminiError] = useState<string | null>(null);
+  const [isAppLoading, setIsAppLoading] = useState<boolean>(true);
+  const [isPdfGenerating, setIsPdfGenerating] = useState<boolean>(false);
+  const [isInitialCvGenerated, setIsInitialCvGenerated] = useState<boolean>(false);
+  const [jobDescriptionForTailoring, setJobDescriptionForTailoring] = useState<string>('');
+  const [activeGeminiAction, setActiveGeminiAction] = useState<string | null>(null); // e.g. 'initial_cv_title', 'initial_cv_jd', 'tailor_cv'
+  const [applyDetailedExperienceUpdates, setApplyDetailedExperienceUpdates] = useState<boolean>(true);
+
+
+  useEffect(() => {
+    try {
+      const savedCVData = localStorage.getItem('geminiCVData');
+      const savedTheme = localStorage.getItem('geminiCVTheme');
+      const initialCvFlag = localStorage.getItem('geminiInitialCvGenerated');
+      const savedJobDescription = localStorage.getItem('geminiJobDescription');
+      const savedApplyDetailedUpdates = localStorage.getItem('geminiApplyDetailedUpdates');
+
+
+      if (savedCVData) setCVData(JSON.parse(savedCVData));
+      if (savedTheme) setCurrentTheme(JSON.parse(savedTheme));
+      if (initialCvFlag) setIsInitialCvGenerated(JSON.parse(initialCvFlag));
+      if (savedJobDescription) setJobDescriptionForTailoring(savedJobDescription);
+      if (savedApplyDetailedUpdates) setApplyDetailedExperienceUpdates(JSON.parse(savedApplyDetailedUpdates));
+      
+    } catch (error) {
+      console.error("Failed to load data from localStorage:", error);
+      setCVData(prev => (Object.keys(prev).length === 0 ? INITIAL_CV_DATA : prev)); 
+      setCurrentTheme(prev => (Object.keys(prev).length === 0 ? DEFAULT_THEME : prev));
+      setIsInitialCvGenerated(false); 
+      setJobDescriptionForTailoring('');
+      setApplyDetailedExperienceUpdates(true);
+    }
+    setIsAppLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if(!isAppLoading) {
+        localStorage.setItem('geminiCVData', JSON.stringify(cvData));
+    }
+  }, [cvData, isAppLoading]);
+
+  useEffect(() => {
+    if(!isAppLoading) {
+        localStorage.setItem('geminiCVTheme', JSON.stringify(currentTheme));
+    }
+  }, [currentTheme, isAppLoading]);
+
+  useEffect(() => {
+    if(!isAppLoading) {
+        localStorage.setItem('geminiInitialCvGenerated', JSON.stringify(isInitialCvGenerated));
+    }
+  }, [isInitialCvGenerated, isAppLoading]);
+
+  useEffect(() => {
+    if (!isAppLoading) {
+        localStorage.setItem('geminiJobDescription', jobDescriptionForTailoring);
+    }
+  }, [jobDescriptionForTailoring, isAppLoading]);
+  
+  useEffect(() => {
+    if (!isAppLoading) {
+        localStorage.setItem('geminiApplyDetailedUpdates', JSON.stringify(applyDetailedExperienceUpdates));
+    }
+  }, [applyDetailedExperienceUpdates, isAppLoading]);
+
+
+  const handleCVDataChange = useCallback((newData: CVData) => {
+    setCVData(newData);
+  }, []);
+
+  const handleThemeChange = useCallback((theme: ThemeOptions) => {
+    setCurrentTheme(theme);
+  }, []);
+  
+  const handleThemeOptionChange = useCallback(<K extends keyof ThemeOptions>(option: K, value: ThemeOptions[K]) => {
+    setCurrentTheme(prevTheme => ({ ...prevTheme, [option]: value }));
+  }, []);
+
+  const clearGeminiError = useCallback(() => {
+    setGeminiError(null);
+  }, []);
+
+  const handleInitialCvGeneration = async (inputValue: string, inputType: InitialInputType) => {
+    const actionType = inputType === 'title' ? 'initial_cv_title' : 'initial_cv_jd';
+    setActiveGeminiAction(actionType);
+    setGeminiStatus(GeminiRequestStatus.LOADING);
+    setGeminiError(null);
+    try {
+        const generationMode = inputType === 'title' ? 'initial_cv_from_title' : 'initial_cv_from_job_description';
+        const result = await generateCVContent(generationMode as SectionGenType, inputValue);
+        startTransition(() => {
+            setCVData(result as CVData);
+            setIsInitialCvGenerated(true);
+            setGeminiStatus(GeminiRequestStatus.SUCCESS);
+            setActiveGeminiAction(null);
+        });
+    } catch (err) {
+        console.error("Initial CV generation error:", err);
+        const errorMessage = err instanceof Error ? err.message : "Failed to generate initial CV.";
+        setGeminiError(errorMessage); 
+        setGeminiStatus(GeminiRequestStatus.ERROR);
+        setActiveGeminiAction(null);
+    }
+  };
+
+  const handleAutofillRequest = useCallback(async (target: AutofillTarget, promptValue: string, context?: any) => {
+    // Determine a unique key for the action to track loading state for specific UI elements
+    const fieldKey = context?.generationType === 'new_experience_entry' 
+        ? `new_experience_entry_${cvData.experience.length}` 
+        : target.field 
+            ? `${target.section}-${target.index}-${target.field}` 
+            : (target.section as string);
+
+    setActiveGeminiAction(fieldKey);
+    setGeminiStatus(GeminiRequestStatus.LOADING);
+    setGeminiError(null);
+    
+    const generationType = (context?.generationType as SectionGenType) || null;
+
+    if (!generationType) {
+        const errMsg = `Unsupported autofill target or generation type mapping. Target: ${JSON.stringify(target)}`;
+        console.error(errMsg);
+        setGeminiError(errMsg);
+        setGeminiStatus(GeminiRequestStatus.ERROR);
+        setActiveGeminiAction(null);
+        return;
+    }
+      
+    try {
+      const result = await generateCVContent(generationType, promptValue, context);
+      
+      startTransition(() => {
+        setCVData(prevCvData => {
+          const newCvData = JSON.parse(JSON.stringify(prevCvData)); 
+
+          if (generationType === 'new_experience_entry' && target.section === 'experience' && target.action === 'add_new_gemini') {
+              const newEntry = result as ExperienceEntry;
+              newCvData.experience.push({ ...newEntry, id: newEntry.id || crypto.randomUUID() });
+          } else if (generationType === 'new_education_entry' && target.section === 'education' && target.action === 'add_new_gemini') {
+              const newEntry = result as EducationEntry;
+              newCvData.education.push({ ...newEntry, id: newEntry.id || crypto.randomUUID() });
+          } else if (target.section === 'summary' && typeof result === 'string') {
+            newCvData.summary = result;
+          } else if (target.section.startsWith('experience.') && target.field === 'responsibilities' && Array.isArray(result) && target.index !== undefined) {
+            if (newCvData.experience[target.index]) {
+              newCvData.experience[target.index].responsibilities = result as string[];
+            }
+          } else if (target.section.startsWith('education.') && target.field === 'details' && Array.isArray(result) && target.index !== undefined) {
+            if (newCvData.education[target.index]) {
+              newCvData.education[target.index].details = result as string[];
+            }
+          } else if (target.section.startsWith('skills.') && target.field === 'skills' && Array.isArray(result) && target.index !== undefined) {
+            if (newCvData.skills[target.index]) {
+              newCvData.skills[target.index].skills = result as string[];
+            }
+          }
+          return newCvData;
+        });
+        setGeminiStatus(GeminiRequestStatus.SUCCESS);
+        setActiveGeminiAction(null);
+      });
+    } catch (err) {
+      console.error("Gemini autofill error:", err);
+      setGeminiError(err instanceof Error ? err.message : "An unknown error occurred during content generation.");
+      setGeminiStatus(GeminiRequestStatus.ERROR);
+      setActiveGeminiAction(null);
+    }
+  }, [cvData.experience.length]);
+
+  const handleTailorCvRequest = useCallback(async (jobDescription: string, currentCvData: CVData, applyDetailedUpdates: boolean) => {
+    setActiveGeminiAction('tailor_cv');
+    setGeminiStatus(GeminiRequestStatus.LOADING);
+    setGeminiError(null);
+    try {
+        const result = await generateCVContent(
+            'tailor_cv_to_job_description', 
+            jobDescription, 
+            { 
+                existingCV: currentCvData,
+                applyDetailedExperienceUpdates: applyDetailedUpdates // Pass the toggle state
+            }
+        ) as TailoredCVUpdate;
+        
+        startTransition(() => {
+            setCVData(prevCvData => {
+                const newCvData = JSON.parse(JSON.stringify(prevCvData));
+                
+                newCvData.summary = result.updatedSummary;
+                
+                newCvData.skills = result.updatedSkills.map(updatedSkill => {
+                    const existingSkill = prevCvData.skills.find(s => s.id === updatedSkill.id || s.category === updatedSkill.category);
+                    return {
+                        ...updatedSkill,
+                        id: updatedSkill.id || existingSkill?.id || crypto.randomUUID()
+                    };
+                });
+
+                result.updatedExperience.forEach(updatedExp => {
+                    const expIndex = newCvData.experience.findIndex((exp: ExperienceEntry) => exp.id === updatedExp.id);
+                    if (expIndex !== -1) {
+                        newCvData.experience[expIndex].responsibilities = updatedExp.responsibilities;
+                        // Only update job title if the toggle was on during the request
+                        if (applyDetailedUpdates && updatedExp.updatedJobTitle && typeof updatedExp.updatedJobTitle === 'string' && updatedExp.updatedJobTitle.trim() !== "") {
+                            newCvData.experience[expIndex].jobTitle = updatedExp.updatedJobTitle;
+                        }
+                    }
+                });
+                
+                // Only add new experience entries if the toggle was on
+                if (applyDetailedUpdates && result.suggestedNewExperienceEntries && result.suggestedNewExperienceEntries.length > 0) {
+                    const newEntriesWithIds = result.suggestedNewExperienceEntries.map(entry => ({
+                        ...entry,
+                        id: crypto.randomUUID()
+                    }));
+                    newCvData.experience.push(...newEntriesWithIds);
+                }
+
+                return newCvData;
+            });
+            setGeminiStatus(GeminiRequestStatus.SUCCESS);
+            setActiveGeminiAction(null);
+        });
+    } catch (err) {
+        console.error("CV Tailoring error:", err);
+        setGeminiError(err instanceof Error ? err.message : "Failed to tailor CV.");
+        setGeminiStatus(GeminiRequestStatus.ERROR);
+        setActiveGeminiAction(null);
+    }
+  }, []);
+
+
+  const handleDownloadPDF = useCallback(() => {
+    const scaleBeforePdf = currentTheme.previewScale || 1;
+
+    startTransition(() => {
+        setIsPdfGenerating(true);
+        setCurrentTheme(prev => ({ ...prev, previewScale: 1 }));
+    });
+    setGeminiError(null);
+
+    setTimeout(() => {
+        const element = document.getElementById('cv-content-formatted');
+        if (element) {
+            const pdfFilename = `CV_${cvData.personalInfo.name.replace(/\s+/g, '_') || 'Resume'}.pdf`;
+            const options = {
+                margin: 0, 
+                filename: pdfFilename,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { 
+                    scale: 2, 
+                    useCORS: true, 
+                    logging: false, 
+                    backgroundColor: currentTheme.backgroundColor === 'white' ? '#FFFFFF' : (tailwindColorToHex(currentTheme.backgroundColor) || '#FFFFFF')
+                }, 
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            };
+
+            html2pdf().from(element).set(options).save()
+                .catch((err: Error) => {
+                    console.error("PDF generation failed:", err);
+                    setGeminiError(`Failed to generate PDF: ${err.message}`);
+                })
+                .finally(() => {
+                    startTransition(() => {
+                        setCurrentTheme(prev => ({ ...prev, previewScale: scaleBeforePdf }));
+                        setIsPdfGenerating(false);
+                    });
+                });
+        } else {
+            console.error("CV content element not found for PDF generation.");
+            setGeminiError("Could not find CV content to generate PDF.");
+            startTransition(() => {
+                setCurrentTheme(prev => ({ ...prev, previewScale: scaleBeforePdf }));
+                setIsPdfGenerating(false);
+            });
+        }
+    }, 250); 
+  }, [currentTheme.previewScale, cvData.personalInfo.name, currentTheme.backgroundColor]);
+
+  const tailwindColorToHex = (twColor: string): string | null => {
+    if (twColor.startsWith('gray-')) return '#F9FAFB'; 
+    if (twColor === 'white') return '#FFFFFF';
+    if (twColor === 'black') return '#000000';
+    const colorMap: {[key:string]: string} = {
+        'slate-50': '#F8FAFC', 'slate-100': '#F1F5F9',
+        'blue-50': '#EFF6FF', 'blue-600': '#2563EB',
+    };
+    return colorMap[twColor] || null; 
+  };
+
+
+  if (isAppLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-100">
+        <LoadingSpinner message="Loading CV Editor..."/>
+      </div>
+    );
+  }
+
+  if (!isInitialCvGenerated && !isAppLoading) { 
+    return (
+        <InitialCVGenerator
+            onCvGenerated={(generatedData) => { 
+                startTransition(() => { 
+                    setCVData(generatedData);
+                    setIsInitialCvGenerated(true);
+                    setGeminiStatus(GeminiRequestStatus.IDLE); 
+                });
+            }}
+            onGenerationError={(errorMessage) => { 
+                setGeminiError(errorMessage);
+                setGeminiStatus(GeminiRequestStatus.ERROR);
+            }}
+            isLoading={geminiStatus === GeminiRequestStatus.LOADING && (activeGeminiAction === 'initial_cv_title' || activeGeminiAction === 'initial_cv_jd')}
+            triggerGeneration={handleInitialCvGeneration} 
+        />
+    );
+  }
+
+
+  return (
+    <div className="flex flex-col h-screen font-sans antialiased">
+      <header className="bg-slate-800 text-white p-4 shadow-md flex justify-between items-center">
+        <h1 className="text-xl font-semibold">Gemini CV Theme Editor</h1>
+        <button
+            onClick={handleDownloadPDF}
+            disabled={isPdfGenerating || geminiStatus === GeminiRequestStatus.LOADING}
+            className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-3 rounded-md text-sm flex items-center gap-2 disabled:opacity-50"
+            aria-label="Download CV as PDF"
+        >
+            <DownloadIcon className="w-4 h-4"/>
+            {isPdfGenerating ? 'Generating...' : 'Download PDF'}
+        </button>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        <aside className="w-1/3 max-w-md bg-slate-200 p-1 flex flex-col border-r border-slate-300">
+            <nav className="flex mb-2 rounded-md bg-slate-300 p-0.5">
+                <button 
+                    onClick={() => setActivePanel('content')}
+                    className={`flex-1 p-2 text-sm font-medium rounded-md flex items-center justify-center gap-2 transition-colors ${activePanel === 'content' ? `bg-white text-blue-600 shadow-sm` : `text-slate-600 hover:bg-slate-100`}`}
+                    aria-pressed={activePanel === 'content'}
+                >
+                    <DocumentTextIcon className="w-4 h-4"/> Content
+                </button>
+                <button 
+                    onClick={() => setActivePanel('theme')}
+                    className={`flex-1 p-2 text-sm font-medium rounded-md flex items-center justify-center gap-2 transition-colors ${activePanel === 'theme' ? `bg-white text-purple-600 shadow-sm` : `text-slate-600 hover:bg-slate-100`}`}
+                    aria-pressed={activePanel === 'theme'}
+                >
+                    <PaletteIcon className="w-4 h-4"/> Theme
+                </button>
+            </nav>
+            <div className="flex-1 overflow-y-auto pr-1"> 
+                {activePanel === 'content' && (
+                    <ContentEditorPanel 
+                        cvData={cvData} 
+                        onCVDataChange={handleCVDataChange} 
+                        onAutofillRequest={handleAutofillRequest}
+                        onTailorCvRequest={handleTailorCvRequest}
+                        geminiStatus={geminiStatus}
+                        geminiError={geminiError}
+                        clearGeminiError={clearGeminiError}
+                        jobDescriptionForTailoring={jobDescriptionForTailoring}
+                        onJobDescriptionChange={setJobDescriptionForTailoring}
+                        activeGeminiAction={activeGeminiAction}
+                        setActiveGeminiAction={setActiveGeminiAction}
+                        applyDetailedExperienceUpdates={applyDetailedExperienceUpdates}
+                        onApplyDetailedExperienceUpdatesChange={setApplyDetailedExperienceUpdates}
+                    />
+                )}
+                {activePanel === 'theme' && (
+                    <ThemeSelectorPanel 
+                        currentTheme={currentTheme} 
+                        onThemeChange={handleThemeChange}
+                        onThemeOptionChange={handleThemeOptionChange}
+                    />
+                )}
+            </div>
+        </aside>
+
+        <main className="flex-1 bg-slate-50 overflow-auto p-6 flex justify-center items-start">
+            <div className="w-full h-full"> 
+                <CVPreview cvData={cvData} theme={currentTheme} />
+            </div>
+        </main>
+      </div>
+       {(geminiStatus === GeminiRequestStatus.LOADING || isPdfGenerating) && (
+          <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" aria-live="assertive" role="alertdialog">
+              <LoadingSpinner 
+                message={
+                    isPdfGenerating ? "Generating PDF..." : 
+                    activeGeminiAction === 'tailor_cv' ? "Gemini is tailoring your CV..." :
+                    activeGeminiAction === 'initial_cv_title' || activeGeminiAction === 'initial_cv_jd' ? "Gemini is crafting your initial CV..." :
+                    (geminiStatus === GeminiRequestStatus.LOADING ? "Gemini is thinking..." : "Processing...")
+                } 
+                size="w-12 h-12" 
+              />
+          </div>
+      )}
+      {geminiError && activePanel !== 'content' && ( 
+          <div className="fixed bottom-4 right-4 z-50">
+            <ErrorMessage message={geminiError} onClear={clearGeminiError} />
+          </div>
+      )}
+    </div>
+  );
+};
+
+export default App;
+```
+
+```bash
+README.md
+
+
+# Run and deploy your AI Studio app
+
+This contains everything you need to run your app locally.
+
+## Run Locally
+
+**Prerequisites:**  Node.js
+
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
+
+```
+
+```bash
+components\CVPreview.tsx
+
+
+
+import React from 'react';
+import { CVData, ThemeOptions, PersonalInfo, ExperienceEntry, EducationEntry, SkillEntry } from '../types';
+
+interface CVPreviewProps {
+  cvData: CVData;
+  theme: ThemeOptions;
+}
+
+const SectionTitle: React.FC<{ title: string; primaryColor: string }> = ({ title, primaryColor }) => (
+  <h2 className={`text-xl font-bold border-b-2 border-${primaryColor} mb-2 pb-1 text-${primaryColor}`}>{title.toUpperCase()}</h2>
+);
+
+const getShortLinkText = (url: string, type: 'linkedin' | 'github' | 'portfolio'): string => {
+    if (!url) return '';
+    try {
+        let cleanUrl = url.trim();
+        if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+            cleanUrl = 'https://' + cleanUrl;
+        }
+        const parsedUrl = new URL(cleanUrl);
+        
+        if (type === 'linkedin') {
+            const pathParts = parsedUrl.pathname.split('/').filter(part => part.length > 0);
+            if (pathParts.length > 1 && (pathParts[0] === 'in' || pathParts[0] === 'pub')) {
+                return pathParts[1];
+            }
+            return parsedUrl.hostname.replace('www.', ''); 
+        }
+        if (type === 'github') {
+            const pathParts = parsedUrl.pathname.split('/').filter(part => part.length > 0);
+            if (pathParts.length > 0) {
+                return pathParts[0]; 
+            }
+            return parsedUrl.hostname.replace('www.', ''); 
+        }
+        if (type === 'portfolio') {
+            return parsedUrl.hostname.replace('www.', ''); 
+        }
+    } catch (e) {
+        const basicClean = url.replace(/^(https?:\/\/)?(www\.)?/i, '').split('/')[0];
+        if (type === 'linkedin' && (url.includes('linkedin.com/in/') || url.includes('linkedin.com/pub/'))) {
+             const parts = url.split('/');
+             const inIndex = parts.indexOf('in');
+             const pubIndex = parts.indexOf('pub');
+             if (inIndex !== -1 && parts[inIndex+1]) return parts[inIndex+1];
+             if (pubIndex !== -1 && parts[pubIndex+1]) return parts[pubIndex+1];
+        }
+        if (type === 'github' && url.includes('github.com/')) {
+            const parts = url.split('/');
+            const ghIndex = parts.indexOf('github.com');
+            if (ghIndex !== -1 && parts[ghIndex+1]) return parts[ghIndex+1];
+        }
+        return basicClean || (type === 'linkedin' ? 'LinkedIn' : type === 'github' ? 'GitHub' : 'Portfolio');
+    }
+    return url; 
+};
+
+
+const PersonalInfoSection: React.FC<{ info: PersonalInfo; theme: ThemeOptions }> = ({ info, theme }) => {
+  const hasContactInfo = info.showPhone || info.showEmail || info.showLinkedin || info.showGithub || info.showPortfolio;
+  const displayPortrait = info.showPortrait && info.portraitUrl;
+
+  const contactItems: (JSX.Element | false)[] = [
+    info.showPhone && info.phone && <span key="phone">{info.phone}</span>,
+    info.showEmail && info.email && <a key="email" href={`mailto:${info.email}`} className={`hover:text-${theme.primaryColor}`}>{info.email}</a>,
+    info.showLinkedin && info.linkedin && <a key="linkedin" href={info.linkedin.startsWith('http') ? info.linkedin : `https://${info.linkedin}`} target="_blank" rel="noopener noreferrer" className={`hover:text-${theme.primaryColor}`}>{getShortLinkText(info.linkedin, 'linkedin')}</a>,
+    info.showGithub && info.github && <a key="github" href={info.github.startsWith('http') ? info.github : `https://${info.github}`} target="_blank" rel="noopener noreferrer" className={`hover:text-${theme.primaryColor}`}>{getShortLinkText(info.github, 'github')}</a>,
+    info.showPortfolio && info.portfolio && <a key="portfolio" href={info.portfolio.startsWith('http') ? info.portfolio : `https://${info.portfolio}`} target="_blank" rel="noopener noreferrer" className={`hover:text-${theme.primaryColor}`}>{getShortLinkText(info.portfolio, 'portfolio')}</a>,
+  ];
+
+  const visibleContactItems = contactItems.filter(Boolean) as JSX.Element[];
+
+  return (
+    <div className={`mb-6 ${displayPortrait ? "flex flex-row items-start gap-4" : "text-center"}`}>
+      {displayPortrait && (
+        <div className="flex-shrink-0">
+          <img 
+            src={info.portraitUrl} 
+            alt={`${info.name}'s portrait`} 
+            className="w-24 h-24 object-cover rounded-md border border-gray-300 shadow-sm"
+          />
+        </div>
+      )}
+      <div className={`${displayPortrait ? "flex-grow text-left" : "text-center"}`}>
+        <h1 className={`text-3xl font-bold text-${theme.primaryColor}`}>{info.name}</h1>
+        <p className={`text-lg text-${theme.secondaryColor}`}>{info.title}</p>
+        
+        {hasContactInfo && (
+          <div className={`mt-2 text-xs text-${theme.textColor} ${displayPortrait ? "flex flex-col items-start gap-y-0.5" : "flex flex-row flex-wrap justify-center items-center"}`}>
+            {displayPortrait ? (
+              visibleContactItems.map(item => (
+                <span key={item.key} className="flex items-center">{item}</span>
+              ))
+            ) : (
+              visibleContactItems.map((item, index) => (
+                <React.Fragment key={item.key || index}>
+                  {item}
+                  {index < visibleContactItems.length - 1 && <span className="mx-1.5 text-gray-400">|</span>}
+                </React.Fragment>
+              ))
+            )}
+          </div>
+        )}
+        {info.showAddress && info.address && (
+          <p className={`text-xs text-gray-500 mt-1 ${!displayPortrait ? 'text-center' : ''}`}>
+            {info.address}
+          </p>
+        )}
+      </div>
+      {/* QR Code display removed from here */}
+    </div>
+  );
+};
+
+
+const SummarySection: React.FC<{ summary: string; theme: ThemeOptions }> = ({ summary, theme }) => (
+  <div className="mb-4">
+    <SectionTitle title="Summary" primaryColor={theme.primaryColor} />
+    <p className={`text-sm text-${theme.textColor} leading-relaxed`}>{summary}</p>
+  </div>
+);
+
+const ExperienceItem: React.FC<{ exp: ExperienceEntry; theme: ThemeOptions }> = ({ exp, theme }) => (
+  <div className="mb-3">
+    <h3 className={`text-md font-semibold text-${theme.textColor}`}>{exp.jobTitle}</h3>
+    <div className="flex justify-between items-center">
+        <p className={`text-sm font-medium text-${theme.secondaryColor}`}>{exp.company}</p>
+        <p className={`text-xs text-gray-500`}>{exp.location}</p>
+    </div>
+    <p className={`text-xs text-gray-500 mb-1`}>{exp.startDate} - {exp.endDate}</p>
+    <ul className={`list-disc list-inside ml-4 text-sm text-${theme.textColor} space-y-0.5`}>
+      {exp.responsibilities.map((resp, index) => <li key={index}>{resp}</li>)}
+    </ul>
+  </div>
+);
+
+const EducationItem: React.FC<{ edu: EducationEntry; theme: ThemeOptions }> = ({ edu, theme }) => (
+  <div className="mb-3">
+    <h3 className={`text-md font-semibold text-${theme.textColor}`}>{edu.degree}</h3>
+    <div className="flex justify-between items-center">
+        <p className={`text-sm font-medium text-${theme.secondaryColor}`}>{edu.institution}</p>
+        <p className={`text-xs text-gray-500`}>{edu.location}</p>
+    </div>
+    <p className={`text-xs text-gray-500 mb-1`}>{edu.graduationDate}</p>
+    {edu.details && edu.details.length > 0 && (
+      <ul className={`list-disc list-inside ml-4 text-sm text-${theme.textColor} space-y-0.5`}>
+        {edu.details.map((detail, index) => <li key={index}>{detail}</li>)}
+      </ul>
+    )}
+  </div>
+);
+
+const SkillsSectionItem: React.FC<{ skillItem: SkillEntry; theme: ThemeOptions }> = ({ skillItem, theme }) => (
+  <div className="mb-2">
+    <h4 className={`text-sm font-semibold text-${theme.secondaryColor}`}>{skillItem.category}:</h4>
+    <p className={`text-sm text-${theme.textColor}`}>{skillItem.skills.join(', ')}</p>
+  </div>
+);
+
+const CVPreview: React.FC<CVPreviewProps> = ({ cvData, theme }) => {
+  const scale = theme.previewScale || 1;
+  // Ensure background color for PDF is explicitly set.
+  // Tailwind classes `bg-white` etc. might not be inherited perfectly by html2pdf if the root element isn't what it expects.
+  // Using style variables for theme colors can be more robust for PDF generation.
+  const cvStyle: React.CSSProperties = {
+    width: '210mm',
+    minHeight: '297mm',
+    padding: '1in' // Standard A4 padding
+    // backgroundColor is now handled by the className `bg-${theme.backgroundColor}` on the div below
+    // and by html2pdf options for the PDF itself.
+  };
+
+  if (theme.backgroundColor.includes('-')) {
+    // If it's a Tailwind class like 'blue-500', we can't directly use it in `style`.
+    // This part is tricky if we don't map Tailwind names to hex. For now, rely on `bg-${theme.backgroundColor}` class.
+    // The id="cv-content-formatted" div might need the class `bg-${theme.backgroundColor}` too for consistency.
+  }
+
+
+  return (
+    <div 
+        className={`p-6 shadow-lg overflow-y-auto bg-${theme.backgroundColor} ${theme.fontFamily}`} 
+        style={{ transform: `scale(${scale})`, transformOrigin: 'top left', transition: 'transform 0.2s ease-out' }}
+        aria-label="CV Preview Area"
+    >
+      <div 
+        id="cv-content-formatted" 
+        className={`mx-auto ${theme.textColor} bg-${theme.backgroundColor} [&>:last-child]:mb-0`} // Added [&>:last-child]:mb-0
+        style={cvStyle}
+      >
+        <PersonalInfoSection info={cvData.personalInfo} theme={theme} />
+        
+        {cvData.summary && <SummarySection summary={cvData.summary} theme={theme} />}
+
+        {cvData.experience.length > 0 && (
+          <div className="mb-4">
+            <SectionTitle title="Experience" primaryColor={theme.primaryColor} />
+            {cvData.experience.map(exp => <ExperienceItem key={exp.id} exp={exp} theme={theme} />)}
+          </div>
+        )}
+
+        {cvData.education.length > 0 && (
+          <div className="mb-4">
+            <SectionTitle title="Education" primaryColor={theme.primaryColor} />
+            {cvData.education.map(edu => <EducationItem key={edu.id} edu={edu} theme={theme} />)}
+          </div>
+        )}
+
+        {cvData.skills.length > 0 && (
+          <div className="mb-4">
+            <SectionTitle title="Skills" primaryColor={theme.primaryColor} />
+            {cvData.skills.map(skillCat => <SkillsSectionItem key={skillCat.id} skillItem={skillCat} theme={theme} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default CVPreview;
+
+```
+
+```bash
+components\panels\ContentEditorPanel.tsx
+
+
+
+import React, { useState }from 'react';
+import { CVData, PersonalInfo, ExperienceEntry, EducationEntry, SkillEntry, GeminiRequestStatus, AutofillTarget, CVSection } from '../../types';
+import { PlusIcon, TrashIcon, SparklesIcon, EyeIcon, EyeSlashIcon, CameraIcon } from '../../constants';
+import LoadingSpinner from '../shared/LoadingSpinner';
+import ErrorMessage from '../shared/ErrorMessage';
+
+interface ContentEditorPanelProps {
+  cvData: CVData;
+  onCVDataChange: (data: CVData) => void;
+  onAutofillRequest: (target: AutofillTarget, prompt: string, context?: any) => void;
+  onTailorCvRequest: (jobDescription: string, currentCvData: CVData, applyDetailedUpdates: boolean) => void;
+  geminiStatus: GeminiRequestStatus;
+  geminiError: string | null;
+  clearGeminiError: () => void;
+  jobDescriptionForTailoring: string;
+  onJobDescriptionChange: (jd: string) => void;
+  activeGeminiAction: string | null; // To differentiate between multiple Gemini actions
+  setActiveGeminiAction: (action: string | null) => void;
+  applyDetailedExperienceUpdates: boolean;
+  onApplyDetailedExperienceUpdatesChange: (value: boolean) => void;
+}
+
+const InputFieldWithToggle: React.FC<{
+  label: string;
+  value: string;
+  name: keyof PersonalInfo; 
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  showValue?: boolean; 
+  onToggleShow?: (visibilityFlagName: keyof PersonalInfo, value: boolean) => void;
+  type?: string;
+  required?: boolean;
+  isToggleable?: boolean;
+}> = ({ label, value, name, onChange, showValue, onToggleShow, type = "text", required = false, isToggleable = true }) => {
+  
+  const handleToggleClick = () => {
+    if (onToggleShow && isToggleable) {
+      const visibilityFlagName = `show${name.charAt(0).toUpperCase() + name.slice(1)}` as keyof PersonalInfo;
+      onToggleShow(visibilityFlagName, !showValue);
+    }
+  };
+
+  return (
+    <div className="mb-3">
+      <div className="flex justify-between items-center mb-1">
+        <label htmlFor={name} className="block text-sm font-medium text-gray-700">
+          {label}
+        </label>
+        {isToggleable && onToggleShow && (
+          <button
+            onClick={handleToggleClick}
+            className="text-xs text-gray-500 hover:text-gray-700 flex items-center"
+            aria-label={showValue ? `Hide ${label}` : `Show ${label}`}
+          >
+            {showValue ? <EyeSlashIcon className="w-4 h-4 mr-1" /> : <EyeIcon className="w-4 h-4 mr-1" />}
+            {showValue ? 'Hide' : 'Show'}
+          </button>
+        )}
+      </div>
+      <input
+        type={type}
+        id={name}
+        name={name}
+        value={value}
+        onChange={onChange}
+        required={required}
+        className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"
+        disabled={isToggleable && !showValue}
+      />
+    </div>
+  );
+};
+
+
+const InputField: React.FC<{label: string, value: string, name: string, onChange: (e: React.ChangeEvent<HTMLInputElement>) => void, type?: string, required?: boolean}> = 
+  ({label, value, name, onChange, type="text", required=false}) => (
+  <div className="mb-3">
+    <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+    <input type={type} id={name} name={name} value={value} onChange={onChange} required={required} className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"/>
+  </div>
+);
+
+const TextAreaField: React.FC<{label: string, value: string, name: string, onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void, rows?: number, required?: boolean, placeholder?: string}> = 
+  ({label, value, name, onChange, rows=3, required=false, placeholder}) => (
+  <div className="mb-3">
+    <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+    <textarea id={name} name={name} value={value} onChange={onChange} rows={rows} required={required} placeholder={placeholder} className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"/>
+  </div>
+);
+
+const ContentEditorPanel: React.FC<ContentEditorPanelProps> = ({ 
+    cvData, 
+    onCVDataChange, 
+    onAutofillRequest, 
+    onTailorCvRequest,
+    geminiStatus, 
+    geminiError, 
+    clearGeminiError,
+    jobDescriptionForTailoring,
+    onJobDescriptionChange,
+    activeGeminiAction,
+    setActiveGeminiAction,
+    applyDetailedExperienceUpdates,
+    onApplyDetailedExperienceUpdatesChange,
+}) => {
+  
+  const [geminiPrompts, setGeminiPrompts] = useState<{[key: string]: string}>({});
+  const [newExperiencePrompt, setNewExperiencePrompt] = useState<string>('');
+  const [personalInfoSaveMessageVisible, setPersonalInfoSaveMessageVisible] = useState<boolean>(false);
+
+
+  const handlePersonalInfoChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, type } = e.target;
+    const isCheckbox = type === 'checkbox';
+    // @ts-ignore
+    const val = isCheckbox ? (e.target as HTMLInputElement).checked : value;
+    onCVDataChange({ ...cvData, personalInfo: { ...cvData.personalInfo, [name]: val } });
+  };
+  
+  const handleToggleShowPersonalInfoField = (visibilityFlagName: keyof PersonalInfo, value: boolean) => {
+     onCVDataChange({ ...cvData, personalInfo: { ...cvData.personalInfo, [visibilityFlagName]: value } });
+  };
+
+  const handlePortraitUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        onCVDataChange({
+          ...cvData,
+          personalInfo: { ...cvData.personalInfo, portraitUrl: reader.result as string },
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const removePortrait = () => {
+    onCVDataChange({
+      ...cvData,
+      personalInfo: { ...cvData.personalInfo, portraitUrl: '', showPortrait: cvData.personalInfo.showPortrait ? false : cvData.personalInfo.showPortrait }, 
+    });
+  };
+
+  const handleSummaryChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    onCVDataChange({ ...cvData, summary: e.target.value });
+  };
+  
+  const handleItemChange = <T extends ExperienceEntry | EducationEntry | SkillEntry>(
+    section: keyof CVData, 
+    index: number, 
+    field: keyof T, 
+    value: any
+  ) => {
+    const items = cvData[section] as T[];
+    const updatedItems = items.map((item, i) => 
+      i === index ? { ...item, [field]: value } : item
+    );
+    onCVDataChange({ ...cvData, [section]: updatedItems });
+  };
+
+  const handleNestedListChange = <T extends ExperienceEntry | EducationEntry | SkillEntry>(
+    section: keyof CVData,
+    itemIndex: number,
+    listField: keyof T, 
+    listItemIndex: number,
+    value: string
+  ) => {
+    const items = cvData[section] as T[];
+    const updatedItems = items.map((item, i) => {
+      if (i === itemIndex) {
+        const list = (item[listField] as string[]).map((li, liIndex) => 
+          liIndex === listItemIndex ? value : li
+        );
+        return { ...item, [listField]: list };
+      }
+      return item;
+    });
+    onCVDataChange({ ...cvData, [section]: updatedItems });
+  };
+  
+  const addNestedListItem = <T extends ExperienceEntry | EducationEntry | SkillEntry>(
+    section: keyof CVData,
+    itemIndex: number,
+    listField: keyof T
+  ) => {
+    const items = cvData[section] as T[];
+    const updatedItems = items.map((item, i) => {
+      if (i === itemIndex) {
+        return { ...item, [listField]: [...(item[listField] as string[]), ''] };
+      }
+      return item;
+    });
+    onCVDataChange({ ...cvData, [section]: updatedItems });
+  };
+
+  const removeNestedListItem = <T extends ExperienceEntry | EducationEntry | SkillEntry>(
+    section: keyof CVData,
+    itemIndex: number,
+    listField: keyof T,
+    listItemIndex: number
+  ) => {
+    const items = cvData[section] as T[];
+    const updatedItems = items.map((item, i) => {
+      if (i === itemIndex) {
+        const list = (item[listField] as string[]).filter((_, liIndex) => liIndex !== listItemIndex);
+        return { ...item, [listField]: list };
+      }
+      return item;
+    });
+    onCVDataChange({ ...cvData, [section]: updatedItems });
+  };
+
+  const addItem = (section: 'experience' | 'education' | 'skills') => {
+    let newItem: ExperienceEntry | EducationEntry | SkillEntry;
+    const id = crypto.randomUUID();
+    if (section === 'experience') {
+      newItem = { id, jobTitle: '', company: '', location: '', startDate: '', endDate: '', responsibilities: [''] };
+    } else if (section === 'education') {
+      newItem = { id, degree: '', institution: '', location: '', graduationDate: '', details: [''] };
+    } else { 
+      newItem = { id, category: '', skills: [''] };
+    }
+    onCVDataChange({ ...cvData, [section]: [...cvData[section], newItem] });
+  };
+
+  const removeItem = (section: keyof CVData, index: number) => {
+    const items = (cvData[section] as Array<any>).filter((_, i) => i !== index);
+    onCVDataChange({ ...cvData, [section]: items });
+  };
+
+  const handleGeminiPromptChange = (key: string, value: string) => {
+    setGeminiPrompts(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleGeminiGenerateClick = (
+    fieldKey: string, 
+    target: AutofillTarget, 
+    generationType: string, 
+    contextData?: any,
+    promptOverride?: string 
+  ) => {
+    const prompt = promptOverride ?? geminiPrompts[fieldKey] ?? '';
+     if (!prompt && generationType !== 'new_experience_entry' && generationType !== 'initial_cv_from_title' && generationType !== 'skill_suggestions') {
+       const existingContent = target.section === 'summary' ? cvData.summary : ''; 
+       onAutofillRequest(target, existingContent, {...contextData, generationType});
+    } else {
+        onAutofillRequest(target, prompt, {...contextData, generationType});
+    }
+    setActiveGeminiAction(fieldKey);
+  };
+  
+  const handleNewExperienceGeminiGenerate = () => {
+    if (!newExperiencePrompt.trim()) {
+        clearGeminiError(); 
+        alert("Please enter a job title or keywords for the new experience.");
+        return;
+    }
+    const fieldKey = `new_experience_entry_${cvData.experience.length}`;
+    setActiveGeminiAction(fieldKey);
+    onAutofillRequest(
+        { section: 'experience', action: 'add_new_gemini' },
+        newExperiencePrompt,
+        { generationType: 'new_experience_entry', existingCV: cvData }
+    );
+    setNewExperiencePrompt(''); 
+  };
+
+  const handleTailorButtonClick = () => {
+    if (!jobDescriptionForTailoring.trim()) {
+        clearGeminiError();
+        alert("Please paste a job description first.");
+        return;
+    }
+    setActiveGeminiAction('tailor_cv');
+    onTailorCvRequest(jobDescriptionForTailoring, cvData, applyDetailedExperienceUpdates);
+  };
+
+  const handleSavePersonalInfo = () => {
+    // Data is already saved by useEffect in App.tsx on any cvData change.
+    // This function provides user feedback.
+    setPersonalInfoSaveMessageVisible(true);
+    setTimeout(() => {
+        setPersonalInfoSaveMessageVisible(false);
+    }, 2500);
+  };
+
+  const renderListEditor = <T extends ExperienceEntry | EducationEntry | SkillEntry>(
+    sectionTitle: string, 
+    sectionKey: 'experience' | 'education' | 'skills',
+    itemFields: Array<{key: keyof T, label: string, type?: string, listKey?: keyof T, listLabel?: string, genType?: string, genContextKeys?: (keyof T)[]}>
+  ) => {
+    const items = cvData[sectionKey] as T[];
+    return (
+      <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-white shadow-sm">
+        <div className="flex justify-between items-center mb-3">
+            <h3 className="text-lg font-semibold text-gray-800">{sectionTitle}</h3>
+        </div>
+        
+        {sectionKey === 'experience' && (
+            <div className="mb-4 p-3 border border-dashed border-blue-400 rounded-md bg-blue-50">
+                <label htmlFor="newExperiencePrompt" className="block text-sm font-medium text-gray-700 mb-1">New Experience Entry with Gemini</label>
+                <input
+                    id="newExperiencePrompt"
+                    type="text"
+                    placeholder="Job title or keywords for new Gemini entry..."
+                    value={newExperiencePrompt}
+                    onChange={(e) => setNewExperiencePrompt(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-md shadow-sm text-sm mb-2"
+                />
+                <button
+                    onClick={handleNewExperienceGeminiGenerate}
+                    disabled={geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === `new_experience_entry_${cvData.experience.length}`}
+                    className="w-full bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-md text-sm flex items-center justify-center gap-1 disabled:opacity-60"
+                >
+                    {geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === `new_experience_entry_${cvData.experience.length}` ? <LoadingSpinner size="w-4 h-4" /> : <SparklesIcon className="w-4 h-4" />}
+                    Generate New Experience
+                </button>
+            </div>
+        )}
+        <button
+            onClick={() => addItem(sectionKey)}
+            className="w-full bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded-md text-xs flex items-center justify-center gap-1 mb-3"
+        >
+            <PlusIcon className="w-4 h-4" /> Add Empty {sectionTitle === "Work Experience" ? "Experience" : sectionTitle === "Skills" ? "Skill Category" : sectionTitle} Entry Manually
+        </button>
+
+        {items.map((item, index) => (
+          <div key={item.id} className="mb-4 p-3 border border-gray-200 rounded-md relative bg-gray-50">
+            <button onClick={() => removeItem(sectionKey, index)} className="absolute top-2 right-2 text-red-500 hover:text-red-700 p-1 rounded-full bg-white bg-opacity-50 hover:bg-opacity-100 transition-colors" aria-label={`Delete this ${sectionTitle} entry`}>
+              <TrashIcon className="w-4 h-4"/>
+            </button>
+            {itemFields.map(field => {
+              const fieldKeyBase = `${sectionKey}-${index}-${String(field.key)}`;
+              if (field.listKey) { 
+                const listItems = item[field.listKey] as string[];
+                return (
+                  <div key={String(field.key)} className="mb-3">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{field.label}</label>
+                    {listItems.map((li, liIndex) => (
+                      <div key={liIndex} className="flex items-center gap-2 mb-1">
+                        <input 
+                          type="text" 
+                          value={li} 
+                          onChange={(e) => handleNestedListChange(sectionKey, index, field.listKey!, liIndex, e.target.value)}
+                          className="w-full p-1.5 border border-gray-300 rounded-md shadow-sm text-sm"
+                        />
+                        <button onClick={() => removeNestedListItem(sectionKey, index, field.listKey!, liIndex)} className="text-red-500 hover:text-red-600" aria-label={`Remove ${field.listLabel || 'item'}`}>
+                            <TrashIcon className="w-4 h-4"/>
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={() => addNestedListItem(sectionKey, index, field.listKey!)} className="text-blue-500 hover:text-blue-600 text-xs flex items-center gap-1 mt-1">
+                        <PlusIcon className="w-3 h-3"/> Add {field.listLabel || 'Item'}
+                    </button>
+                    {field.genType && ( 
+                        <div className="mt-2 p-2 border-t border-gray-200">
+                            <input 
+                                type="text"
+                                placeholder={`Keywords for Gemini to generate ${field.label}...`}
+                                value={geminiPrompts[fieldKeyBase] || ''}
+                                onChange={(e) => handleGeminiPromptChange(fieldKeyBase, e.target.value)}
+                                className="w-full p-1.5 border border-gray-300 rounded-md shadow-sm text-xs mb-1"
+                            />
+                            <button 
+                                onClick={() => {
+                                  let contextData: any = {};
+                                  if (field.genContextKeys) {
+                                    contextData = field.genContextKeys.reduce((acc, k) => ({...acc, [k]: item[k]}), {});
+                                  }
+                                  if (sectionKey === 'skills' && field.key === 'skills' && (item as SkillEntry).category) {
+                                    contextData.skillCategory = (item as SkillEntry).category;
+                                  }
+
+                                  handleGeminiGenerateClick(
+                                      fieldKeyBase, 
+                                      {section: `${sectionKey}.${index}.${String(field.listKey)}` as CVSection, index: index, field: String(field.listKey), action: 'update_list'}, 
+                                      field.genType!,
+                                      contextData
+                                  );
+                                }}
+                                disabled={geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === fieldKeyBase}
+                                className="bg-purple-500 hover:bg-purple-600 text-white px-2 py-1 rounded-md text-xs flex items-center gap-1 w-full justify-center"
+                            >
+                                {geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === fieldKeyBase ? <LoadingSpinner size="w-3 h-3" /> : <SparklesIcon className="w-3 h-3" />}
+                                Generate {field.label} with AI
+                            </button>
+                        </div>
+                    )}
+                  </div>
+                );
+              }
+              return (
+                <InputField 
+                    key={String(field.key)} 
+                    label={field.label} 
+                    name={String(field.key)} 
+                    value={item[field.key] as string} 
+                    onChange={(e) => handleItemChange(sectionKey, index, field.key, e.target.value)}
+                    type={field.type || 'text'}
+                />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  };
+  
+  return (
+    <div className="p-4 space-y-6 bg-slate-50 rounded-lg shadow-inner max-h-full overflow-y-auto">
+      {geminiError && <ErrorMessage message={geminiError} onClear={clearGeminiError}/>}
+
+      {/* Tailor CV to Job Description Section */}
+      <div className="p-4 border border-blue-300 rounded-lg bg-blue-50 shadow-sm">
+        <h3 className="text-lg font-semibold text-blue-800 mb-3">Tailor CV to Job Description</h3>
+        <TextAreaField
+          label="Paste Job Description Here"
+          name="jobDescriptionForTailoring"
+          value={jobDescriptionForTailoring}
+          onChange={(e) => onJobDescriptionChange(e.target.value)}
+          rows={6}
+          placeholder="Paste the full job description to help Gemini tailor your CV..."
+        />
+        <div className="mt-3 mb-3">
+            <label htmlFor="applyDetailedExperienceUpdatesToggle" className="flex items-center text-sm text-gray-700 cursor-pointer">
+                <input
+                    type="checkbox"
+                    id="applyDetailedExperienceUpdatesToggle"
+                    checked={applyDetailedExperienceUpdates}
+                    onChange={(e) => onApplyDetailedExperienceUpdatesChange(e.target.checked)}
+                    className="mr-2 h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                Allow AI to update existing job titles and suggest new experience entries for alignment.
+            </label>
+        </div>
+        <button
+          onClick={handleTailorButtonClick}
+          disabled={geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === 'tailor_cv'}
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md text-sm flex items-center justify-center gap-1 mt-2 disabled:opacity-60"
+        >
+          {geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === 'tailor_cv' ? <LoadingSpinner size="w-4 h-4" /> : <SparklesIcon className="w-4 h-4" />}
+          Tailor CV with Gemini
+        </button>
+      </div>
+      
+      <div className="p-4 border border-gray-200 rounded-lg bg-white shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-800 mb-3">Personal Information</h3>
+        <InputField label="Full Name" name="name" value={cvData.personalInfo.name} onChange={handlePersonalInfoChange} required />
+        <InputField label="Title (e.g., Software Engineer)" name="title" value={cvData.personalInfo.title} onChange={handlePersonalInfoChange} />
+        
+        <InputFieldWithToggle label="Phone" name="phone" value={cvData.personalInfo.phone || ''} onChange={handlePersonalInfoChange} type="tel" showValue={cvData.personalInfo.showPhone} onToggleShow={handleToggleShowPersonalInfoField} />
+        <InputFieldWithToggle label="Email" name="email" value={cvData.personalInfo.email || ''} onChange={handlePersonalInfoChange} type="email" showValue={cvData.personalInfo.showEmail} onToggleShow={handleToggleShowPersonalInfoField} />
+        <InputFieldWithToggle label="LinkedIn Profile URL" name="linkedin" value={cvData.personalInfo.linkedin || ''} onChange={handlePersonalInfoChange} showValue={cvData.personalInfo.showLinkedin} onToggleShow={handleToggleShowPersonalInfoField}/>
+        <InputFieldWithToggle label="GitHub Profile URL" name="github" value={cvData.personalInfo.github || ''} onChange={handlePersonalInfoChange} showValue={cvData.personalInfo.showGithub} onToggleShow={handleToggleShowPersonalInfoField}/>
+        <InputFieldWithToggle label="Portfolio URL" name="portfolio" value={cvData.personalInfo.portfolio || ''} onChange={handlePersonalInfoChange} showValue={cvData.personalInfo.showPortfolio} onToggleShow={handleToggleShowPersonalInfoField}/>
+        <InputFieldWithToggle label="Address" name="address" value={cvData.personalInfo.address || ''} onChange={handlePersonalInfoChange} showValue={cvData.personalInfo.showAddress} onToggleShow={handleToggleShowPersonalInfoField}/>
+
+        <div className="mt-4 pt-4 border-t">
+            <div className="flex justify-between items-center mb-1">
+                <label className="block text-sm font-medium text-gray-700 flex items-center"><CameraIcon className="w-4 h-4 mr-2 text-gray-500"/>Portrait Image</label>
+                <button
+                    onClick={() => handleToggleShowPersonalInfoField('showPortrait', !cvData.personalInfo.showPortrait)}
+                    className="text-xs text-gray-500 hover:text-gray-700 flex items-center"
+                >
+                    {cvData.personalInfo.showPortrait ? <EyeSlashIcon className="w-4 h-4 mr-1" /> : <EyeIcon className="w-4 h-4 mr-1" />}
+                    {cvData.personalInfo.showPortrait ? 'Hide' : 'Show'} Portrait
+                </button>
+            </div>
+            {cvData.personalInfo.showPortrait && (
+                <>
+                    <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePortraitUpload}
+                        className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 mb-2"
+                        aria-label="Upload portrait image"
+                    />
+                    {cvData.personalInfo.portraitUrl && (
+                        <div className="mt-2 text-center">
+                            <img src={cvData.personalInfo.portraitUrl} alt="Portrait Preview" className="w-24 h-24 object-cover rounded-md inline-block border shadow-sm" />
+                            <button onClick={removePortrait} className="mt-1 text-xs text-red-500 hover:text-red-700">Remove Portrait</button>
+                        </div>
+                    )}
+                </>
+            )}
+        </div>
+        <div className="mt-4 pt-4 border-t flex items-center">
+            <button
+                onClick={handleSavePersonalInfo}
+                className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-md text-sm transition-colors"
+            >
+                Save Personal Info
+            </button>
+            {personalInfoSaveMessageVisible && (
+                <span className="ml-3 text-sm text-green-700 italic">Personal info saved!</span>
+            )}
+        </div>
+      </div>
+
+      <div className="p-4 border border-gray-200 rounded-lg bg-white shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-800 mb-3">Professional Summary</h3>
+        <TextAreaField label="Summary" name="summary" value={cvData.summary} onChange={handleSummaryChange} rows={4}/>
+        <div className="mt-2">
+            <input 
+                type="text"
+                placeholder="Keywords for Gemini (e.g., 'dynamic leader, 10 yrs exp')"
+                value={geminiPrompts['summary'] || ''}
+                onChange={(e) => handleGeminiPromptChange('summary', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-md shadow-sm text-sm mb-1"
+            />
+            <button 
+                onClick={() => handleGeminiGenerateClick('summary', {section: 'summary'}, 'summary', { existingCV: cvData } )}
+                disabled={geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === 'summary'}
+                className="bg-purple-500 hover:bg-purple-600 text-white px-3 py-1.5 rounded-md text-sm flex items-center gap-1"
+            >
+               {geminiStatus === GeminiRequestStatus.LOADING && activeGeminiAction === 'summary' ? <LoadingSpinner size="w-4 h-4" /> : <SparklesIcon className="w-4 h-4" />}
+               Generate with Gemini
+            </button>
+        </div>
+      </div>
+      
+      {renderListEditor<ExperienceEntry>('Work Experience', 'experience', [
+        { key: 'jobTitle', label: 'Job Title' },
+        { key: 'company', label: 'Company' },
+        { key: 'location', label: 'Location' },
+        { key: 'startDate', label: 'Start Date (e.g., Jan 2020)' },
+        { key: 'endDate', label: 'End Date (e.g., Present or Dec 2022)' },
+        { key: 'responsibilities', label: 'Responsibilities', listKey: 'responsibilities', listLabel: 'Responsibility', genType: 'experience_responsibilities', genContextKeys: ['jobTitle', 'company'] }
+      ])}
+
+      {renderListEditor<EducationEntry>('Education', 'education', [
+        { key: 'degree', label: 'Degree (e.g., B.S. in Computer Science)' },
+        { key: 'institution', label: 'Institution Name' },
+        { key: 'location', label: 'Location' },
+        { key: 'graduationDate', label: 'Graduation Date (e.g., May 2020)' },
+        { key: 'details', label: 'Details (e.g., GPA, Honors, Relevant Coursework)', listKey: 'details', listLabel: 'Detail', genType: 'education_details', genContextKeys: ['degree', 'institution'] }
+      ])}
+
+      {renderListEditor<SkillEntry>('Skills', 'skills', [
+        { key: 'category', label: 'Skill Category (e.g., Programming Languages)' },
+        { key: 'skills', label: 'Skills', listKey: 'skills', listLabel: 'Skill', genType: 'skill_suggestions', genContextKeys: ['category'] 
+        }
+      ])}
+
+    </div>
+  );
+};
+
+export default ContentEditorPanel;
+```
+
+```bash
+components\panels\ThemeSelectorPanel.tsx
+
+
+
+import React from 'react';
+import { ThemeOptions } from '../../types';
+import { AVAILABLE_THEMES } from '../../constants';
+
+interface ThemeSelectorPanelProps {
+  currentTheme: ThemeOptions;
+  onThemeChange: (theme: ThemeOptions) => void;
+  onThemeOptionChange: <K extends keyof ThemeOptions>(option: K, value: ThemeOptions[K]) => void;
+}
+
+const ThemeSelectorPanel: React.FC<ThemeSelectorPanelProps> = ({ currentTheme, onThemeChange, onThemeOptionChange }) => {
+  const commonInputClass = "w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm";
+  const commonLabelClass = "block text-sm font-medium text-gray-700 mb-1";
+
+  const tailwindColorOptions = [
+    'slate', 'gray', 'zinc', 'neutral', 'stone', 'red', 'orange', 'amber', 'yellow',
+    'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose'
+  ];
+  const colorWeights = ['100', '200', '300', '400', '500', '600', '700', '800', '900'];
+  const fontFamilies = [
+      {name: 'Sans Serif', value: 'font-sans'},
+      {name: 'Serif', value: 'font-serif'},
+      {name: 'Monospace', value: 'font-mono'}
+  ];
+
+  return (
+    <div className="p-4 space-y-6 bg-white rounded-lg shadow">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-800 mb-2">Predefined Themes</h3>
+        <div className="grid grid-cols-2 gap-2">
+          {AVAILABLE_THEMES.map(theme => (
+            <button
+              key={theme.name}
+              onClick={() => onThemeChange(theme.options)}
+              className={`p-2 rounded-md text-sm border-2 ${
+                currentTheme.primaryColor === theme.options.primaryColor && currentTheme.fontFamily === theme.options.fontFamily
+                  ? `border-${theme.options.primaryColor} ring-2 ring-${theme.options.primaryColor} bg-${theme.options.primaryColor} bg-opacity-10`
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <span style={{ color: theme.options.primaryColor.includes('-') ? undefined : theme.options.primaryColor }} className={`font-semibold text-${theme.options.primaryColor}`}>{theme.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold text-gray-800 mb-3">Customize Theme</h3>
+        <div className="space-y-4">
+          <div>
+            <label htmlFor="primaryColor" className={commonLabelClass}>Primary Color (e.g., blue-600)</label>
+            <div className="flex gap-2">
+                <select 
+                    value={currentTheme.primaryColor.split('-')[0]}
+                    onChange={(e) => onThemeOptionChange('primaryColor', `${e.target.value}-${currentTheme.primaryColor.split('-')[1] || '600'}`)}
+                    className={commonInputClass + " w-2/3"}
+                >
+                    {tailwindColorOptions.map(color => <option key={color} value={color}>{color}</option>)}
+                </select>
+                <select 
+                    value={currentTheme.primaryColor.split('-')[1] || '600'}
+                    onChange={(e) => onThemeOptionChange('primaryColor', `${currentTheme.primaryColor.split('-')[0]}-${e.target.value}`)}
+                    className={commonInputClass + " w-1/3"}
+                >
+                    {colorWeights.map(weight => <option key={weight} value={weight}>{weight}</option>)}
+                </select>
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="fontFamily" className={commonLabelClass}>Font Family</label>
+            <select
+              id="fontFamily"
+              value={currentTheme.fontFamily}
+              onChange={(e) => onThemeOptionChange('fontFamily', e.target.value)}
+              className={commonInputClass}
+            >
+              {fontFamilies.map(font => <option key={font.value} value={font.value}>{font.name}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="previewScale" className={commonLabelClass}>Preview Zoom ({Math.round((currentTheme.previewScale || 1) * 100)}%)</label>
+            <input
+                type="range"
+                id="previewScale"
+                min="0.5" max="1.5" step="0.05"
+                value={currentTheme.previewScale || 1}
+                onChange={(e) => onThemeOptionChange('previewScale', parseFloat(e.target.value))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ThemeSelectorPanel;
+```
+
+```bash
+components\shared\ErrorMessage.tsx
+
+
+
+import React from 'react';
+
+interface ErrorMessageProps {
+  message: string | null;
+  onClear?: () => void;
+}
+
+const ErrorMessage: React.FC<ErrorMessageProps> = ({ message, onClear }) => {
+  if (!message) return null;
+
+  return (
+    <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+      <strong className="font-bold">Error: </strong>
+      <span className="block sm:inline">{message}</span>
+      {onClear && (
+         <button 
+            onClick={onClear} 
+            className="absolute top-0 bottom-0 right-0 px-4 py-3"
+            aria-label="Clear error"
+        >
+            <svg className="fill-current h-6 w-6 text-red-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><title>Close</title><path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"/></svg>
+        </button>
+      )}
+    </div>
+  );
+};
+
+export default ErrorMessage;
+```
+
+```bash
+components\shared\LoadingSpinner.tsx
+
+
+
+import React from 'react';
+
+const LoadingSpinner: React.FC<{ size?: string; message?: string }> = ({ size = 'w-8 h-8', message }) => {
+  return (
+    <div className="flex flex-col items-center justify-center">
+      <div className={`animate-spin rounded-full ${size} border-t-2 border-b-2 border-blue-500`}></div>
+      {message && <p className="mt-2 text-sm text-gray-600">{message}</p>}
+    </div>
+  );
+};
+
+export default LoadingSpinner;
+```
+
+```bash
+constants.tsx
+
+
+
+import React from 'react';
+import { ThemeOptions, CVData } from './types';
+
+export const DEFAULT_THEME: ThemeOptions = {
+  primaryColor: 'blue-600',
+  secondaryColor: 'gray-700',
+  backgroundColor: 'white',
+  textColor: 'gray-900',
+  fontFamily: 'font-sans',
+  previewScale: 1,
+};
+
+export const AVAILABLE_THEMES: { name: string; options: ThemeOptions }[] = [
+  { name: 'Default Blue', options: DEFAULT_THEME },
+  {
+    name: 'Modern Teal',
+    options: { ...DEFAULT_THEME, primaryColor: 'teal-600', secondaryColor: 'slate-700', textColor: 'slate-900' },
+  },
+  {
+    name: 'Classic Gray',
+    options: { ...DEFAULT_THEME, primaryColor: 'gray-800', secondaryColor: 'gray-600', textColor: 'black', fontFamily: 'font-serif' },
+  },
+  {
+    name: 'Creative Purple',
+    options: { ...DEFAULT_THEME, primaryColor: 'purple-600', secondaryColor: 'pink-500', backgroundColor: 'gray-50', textColor: 'gray-800' },
+  },
+];
+
+export const INITIAL_CV_DATA: CVData = {
+  personalInfo: {
+    name: 'Alex Johnson',
+    title: 'Senior Software Engineer',
+    phone: '(555) 123-4567',
+    email: 'alex.johnson@email.com',
+    linkedin: 'linkedin.com/in/alexjohnson',
+    github: 'github.com/alexj',
+    portfolio: 'alexjohnson.dev',
+    address: '123 Tech Avenue, Silicon Valley, CA',
+
+    portraitUrl: '',
+    showPortrait: false,
+
+    showPhone: true,
+    showEmail: true,
+    showLinkedin: true,
+    showGithub: true,
+    showPortfolio: true,
+    showAddress: false,
+  },
+  summary:
+    'Highly motivated and results-oriented Senior Software Engineer with 8+ years of experience in developing scalable web applications. Proficient in full-stack development with a strong focus on frontend technologies. Seeking to leverage expertise in a challenging new role.',
+  experience: [
+    {
+      id: crypto.randomUUID(),
+      jobTitle: 'Senior Software Engineer',
+      company: 'Tech Solutions Inc.',
+      location: 'San Francisco, CA',
+      startDate: 'Jan 2020',
+      endDate: 'Present',
+      responsibilities: [
+        'Led the development of a new customer portal, improving user satisfaction by 25%.',
+        'Mentored junior engineers, fostering a collaborative and productive team environment.',
+        'Architected and implemented microservices, enhancing system scalability and performance.',
+      ],
+    },
+    {
+      id: crypto.randomUUID(),
+      jobTitle: 'Software Engineer',
+      company: 'Innovatech Ltd.',
+      location: 'Austin, TX',
+      startDate: 'Jun 2016',
+      endDate: 'Dec 2019',
+      responsibilities: [
+        'Developed and maintained features for a SaaS product using React and Node.js.',
+        'Contributed to a 15% reduction in bug reports through rigorous testing and code reviews.',
+        'Collaborated with cross-functional teams to deliver high-quality software solutions.',
+      ],
+    },
+  ],
+  education: [
+    {
+      id: crypto.randomUUID(),
+      degree: 'M.S. in Computer Science',
+      institution: 'Stanford University',
+      location: 'Stanford, CA',
+      graduationDate: 'May 2016',
+      details: ['GPA: 3.9/4.0', 'Thesis on Distributed Systems'],
+    },
+    {
+      id: crypto.randomUUID(),
+      degree: 'B.S. in Software Engineering',
+      institution: 'University of Texas at Austin',
+      location: 'Austin, TX',
+      graduationDate: 'May 2014',
+      details: ['Graduated with Honors'],
+    },
+  ],
+  skills: [
+    {
+      id: crypto.randomUUID(),
+      category: 'Programming Languages',
+      skills: ['JavaScript (ES6+)', 'TypeScript', 'Python', 'Java'],
+    },
+    {
+      id: crypto.randomUUID(),
+      category: 'Frameworks/Libraries',
+      skills: ['React', 'Next.js', 'Node.js', 'Express.js', 'Spring Boot'],
+    },
+    {
+      id: crypto.randomUUID(),
+      category: 'Tools & Platforms',
+      skills: ['Git', 'Docker', 'Kubernetes', 'AWS', 'Jenkins'],
+    },
+  ],
+};
+
+export const GEMINI_TEXT_MODEL = 'gemini-2.5-flash-preview-04-17';
+
+export const PlusIcon: React.FC<{className?: string}> = ({className}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-5 h-5"}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+  </svg>
+);
+
+export const TrashIcon: React.FC<{className?: string}> = ({className}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-5 h-5"}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12.56 0c1.153 0 2.243.096 3.242.26m3.242-.26M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+  </svg>
+);
+
+export const SparklesIcon: React.FC<{className?: string}> = ({className}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-5 h-5"}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+  </svg>
+);
+
+export const PaletteIcon: React.FC<{className?: string}> = ({className}) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-6 h-6"}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125V5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.15-.15.337-.273.53-.365m0 0a4.878 4.878 0 0 1 7.426 0l.928.928a4.878 4.878 0 0 1 0 7.426l-.928.928a4.878 4.878 0 0 1-7.426 0l-.928-.928a4.878 4.878 0 0 1 0-7.426Z" />
+    </svg>
+);
+
+export const DocumentTextIcon: React.FC<{className?: string}> = ({className}) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-6 h-6"}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+    </svg>
+);
+
+export const WandSparklesIcon: React.FC<{className?: string}> = ({className}) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-6 h-6"}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672Zm-7.518-.267A8.25 8.25 0 1 1 20.25 10.5M8.288 14.212A5.25 5.25 0 1 1 17.25 10.5" />
+    </svg>
+);
+
+export const DownloadIcon: React.FC<{className?: string}> = ({className}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-5 h-5"}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+  </svg>
+);
+
+export const EyeIcon: React.FC<{className?: string}> = ({className}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-5 h-5"}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+  </svg>
+);
+
+export const EyeSlashIcon: React.FC<{className?: string}> = ({className}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-5 h-5"}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.15 10.15 0 0 1 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639A10.154 10.154 0 0 1 12 19.5c-1.897 0-3.7-.467-5.283-1.25M12 15V9.75M15 12a3 3 0 0 1-6 0m3 0a3 3 0 0 0-3 3m0 0H6.75M17.25 12H18m-3.75 3.75H15M11.25 3.75H12M4.5 12.75H6M12 21V19.5" />
+  </svg>
+);
+
+export const CameraIcon: React.FC<{className?: string}> = ({className}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-5 h-5"}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.04l-.821 1.316Z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+  </svg>
+);
+
+```
+
+```bash
+enclose.py
+
+
+import os
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from pathlib import Path
+
+def get_code_files(directory):
+    """Get all code files from directory and subdirectories"""
+    # Define common code file extensions
+    code_extensions = {
+        '.py', '.js', '.java', '.cpp', '.c', '.cs', '.php', '.rb', '.go',
+        '.rs', '.kt', '.swift', '.m', '.h', '.hpp', '.scala', '.r', '.pl',
+        '.sh', '.bat', '.ps1', '.html', '.css', '.scss', '.sass', '.less',
+        '.xml', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+        '.sql', '.md', '.tsx', '.jsx', '.vue', '.dart', '.lua', '.perl',
+        '.asm', '.vb', '.fs', '.ml', '.clj', '.ex', '.exs', '.elm', '.hs'
+    }
+    
+    code_files = []
+    
+    for root, dirs, files in os.walk(directory):
+        # Skip hidden directories and common non-code directories
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', '__pycache__', 'venv', 'env']]
+        
+        for file in files:
+            if any(file.endswith(ext) for ext in code_extensions):
+                full_path = os.path.join(root, file)
+                relative_path = os.path.relpath(full_path, directory)
+                code_files.append((full_path, relative_path))
+    
+    return sorted(code_files, key=lambda x: x[1])
+
+def combine_files(source_dir, output_file):
+    """Combine all code files into a single text file"""
+    code_files = get_code_files(source_dir)
+    
+    if not code_files:
+        messagebox.showwarning("No Files Found", "No code files found in the selected directory.")
+        return False
+    
+    try:
+        with open(output_file, 'w', encoding='utf-8') as outfile:
+            for i, (full_path, relative_path) in enumerate(code_files):
+                # Write separator if not the first file
+                if i > 0:
+                    outfile.write('\n\n')
+                
+                # Start the code block
+                outfile.write('```bash\n')
+                # Write the file path
+                outfile.write(f'{relative_path}\n')
+                # Add two blank lines after the path
+                outfile.write('\n\n')
+                
+                # Write the file content (still within the same code block)
+                try:
+                    with open(full_path, 'r', encoding='utf-8') as infile:
+                        content = infile.read()
+                        outfile.write(content)
+                except Exception as e:
+                    outfile.write(f'[Error reading file: {str(e)}]\n')
+                    print(f"Error reading {relative_path}: {str(e)}")
+                
+                # Close the code block
+                outfile.write('\n```')
+        
+        return True
+    
+    except Exception as e:
+        messagebox.showerror("Error", f"Error writing output file: {str(e)}")
+        return False
+
+def main():
+    """Main function to run the script"""
+    # Create root window but hide it
+    root = tk.Tk()
+    root.withdraw()
+    
+    # Show dialog to select source directory
+    source_dir = filedialog.askdirectory(
+        title="Select folder containing code files"
+    )
+    
+    if not source_dir:
+        messagebox.showinfo("Cancelled", "No directory selected. Exiting.")
+        return
+    
+    # Get list of files that will be processed (for preview)
+    code_files = get_code_files(source_dir)
+    file_count = len(code_files)
+    
+    if file_count == 0:
+        messagebox.showwarning("No Files", "No code files found in the selected directory.")
+        return
+    
+    # Show preview of files to be combined
+    preview_msg = f"Found {file_count} code files. Continue?"
+    if file_count <= 10:
+        preview_msg += "\n\nFiles to be combined:\n" + "\n".join([f[1] for f in code_files[:10]])
+    else:
+        preview_msg += f"\n\nShowing first 10 files:\n" + "\n".join([f[1] for f in code_files[:10]])
+        preview_msg += f"\n... and {file_count - 10} more files"
+    
+    if not messagebox.askyesno("Confirm", preview_msg):
+        return
+    
+    # Show dialog to select output file
+    output_file = filedialog.asksaveasfilename(
+        title="Save combined file as",
+        defaultextension=".txt",
+        filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        initialfile="combined_code.txt"
+    )
+    
+    if not output_file:
+        messagebox.showinfo("Cancelled", "No output file selected. Exiting.")
+        return
+    
+    # Combine the files
+    messagebox.showinfo("Processing", f"Combining {file_count} files. This may take a moment...")
+    
+    if combine_files(source_dir, output_file):
+        # Calculate output file size
+        file_size = os.path.getsize(output_file)
+        size_mb = file_size / (1024 * 1024)
+        
+        messagebox.showinfo(
+            "Success", 
+            f"Successfully combined {file_count} files!\n\n"
+            f"Output file: {output_file}\n"
+            f"File size: {size_mb:.2f} MB"
+        )
+    
+    root.destroy()
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+index.html
+
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gemini CV Theme Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              // Allows dynamic primary/secondary colors if needed, but not strictly necessary with full class names
+              // For example: 'primary': 'var(--color-primary)',
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'], // Example, ensure fonts are loaded or use system defaults
+              serif: ['Georgia', 'serif'],
+              mono: ['Menlo', 'monospace'],
+            }
+          }
+        },
+        // Safelist dynamic classes if they are constructed in a way Tailwind JIT cannot detect
+        // For CVPreview, colors like bg-blue-600, text-gray-700 etc. are dynamically used.
+        // It's better to ensure Tailwind can "see" these classes.
+        // If Tailwind is loaded via CDN and classes are purely dynamic from JS, 
+        // they might not be generated. However, using full class strings like `bg-${theme.primaryColor}`
+        // is generally fine as long as `theme.primaryColor` resolves to a known Tailwind color name like `blue-600`.
+        // The current implementation directly uses strings like 'blue-600', 'gray-700' so it should be fine.
+        // Adding a safelist for all possible color-shade combinations used can be a robust way.
+        safelist: [
+          // All colors used in AVAILABLE_THEMES and for customization
+          ...[
+            'slate', 'gray', 'zinc', 'neutral', 'stone', 'red', 'orange', 'amber', 'yellow',
+            'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose'
+          ].flatMap(color => [
+            ...['100', '200', '300', '400', '500', '600', '700', '800', '900'].flatMap(weight => [
+              `bg-${color}-${weight}`,
+              `text-${color}-${weight}`,
+              `border-${color}-${weight}`,
+              `ring-${color}-${weight}`,
+              `hover:bg-${color}-${weight}`,
+              `hover:text-${color}-${weight}`,
+              `hover:border-${color}-${weight}`,
+            ]),
+            // For cases without a weight (e.g., text-black)
+            `bg-${color}`,
+            `text-${color}`,
+            `border-${color}`,
+            `ring-${color}`,
+            `hover:bg-${color}`,
+            `hover:text-${color}`,
+            `hover:border-${color}`,
+          ]),
+          'bg-white', 'text-black', 'bg-gray-50', 'bg-opacity-10', // Other specific colors
+          'font-sans', 'font-serif', 'font-mono', // Font families
+        ],
+      }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Georgia&family=Menlo&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" integrity="sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.5.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-slate-100">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
+```
+
+```bash
+index.tsx
+
+
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+```
+
+```bash
+metadata.json
+
+
+{
+  "name": "AI CV Maker",
+  "description": "A React application for building and styling CVs with AI-powered content generation using Gemini API.",
+  "requestFramePermissions": []
+}
+```
+
+```bash
+package.json
+
+
+{
+  "name": "ai-cv-maker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@google/genai": "^1.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.2.0"
+  }
+}
+
+```
+
+```bash
+tsconfig.json
+
+
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "allowJs": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+
+    "paths": {
+      "@/*" :  ["./*"]
+    }
+  }
+}
+
+```
