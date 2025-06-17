@@ -1,13 +1,13 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
-import { GEMINI_TEXT_MODEL } from "./constants"; // Corrected import path
+import { GEMINI_TEXT_MODEL } from "../constants";
 import { CVData, ExperienceEntry, EducationEntry, SkillEntry, PersonalInfo, TailoredCVUpdate, SectionContentType } from "./types"; 
 
-// Ensure API_KEY is handled by the build environment or hosting platform.
-const API_KEY = process.env.API_KEY;
+// Access the API key from the global gcbData object provided by wp_localize_script
+const API_KEY = (window as any).gcbData?.api_key;
 
 if (!API_KEY) {
-  console.error("API_KEY for Gemini is not set. Please ensure the API_KEY environment variable is configured.");
+  console.error("API_KEY for Gemini is not set. Please ensure it is available in window.gcbData.api_key.");
 }
 
 const ai = new GoogleGenAI({ apiKey: API_KEY! });
