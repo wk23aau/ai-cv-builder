@@ -1,7 +1,7 @@
 // Entry point for the WordPress plugin version
 import React from 'react';
 import ReactDOM from 'react-dom';
-import App from './App';
+import App from '../../App';
 
 // Make the builder available globally
 window.GeminiCVBuilder = {
