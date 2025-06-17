@@ -65,8 +65,8 @@ function aicvb_settings_init() {
     );
 
     add_settings_field(
-        'aicvb_gemini_api_key_field',
-        'Gemini API Key',
+        'aicvb_gemini_api_key_field', // Keep ID for compatibility if settings are saved
+        'API Key', // Changed Label
         'aicvb_api_key_field_html',
         'ai_cv_builder_settings',
         'aicvb_api_settings_section'
@@ -78,14 +78,14 @@ add_action( 'admin_init', 'aicvb_settings_init' );
  * Render the API key input field HTML.
  */
 function aicvb_api_key_field_html() {
-    $api_key = get_option( 'aicvb_gemini_api_key' );
+    $api_key = get_option( 'aicvb_gemini_api_key' ); // Keep option name for compatibility
     ?>
     <input type='password' name='aicvb_gemini_api_key' value='<?php echo esc_attr( $api_key ); ?>' class='regular-text'>
-    <p class="description">Enter your Gemini API Key. This is required for the AI features to work.</p>
+    <p class="description">Enter your API Key. This is required for the AI features to work.</p> 
     <?php
 }
 
-// Define the Gemini API endpoint (adjust model name and task as needed)
+// Define the AI Provider API endpoint (model name and task might vary)
 define( 'AICVB_GEMINI_API_ENDPOINT', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent' );
 
 /**
@@ -97,10 +97,10 @@ define( 'AICVB_GEMINI_API_ENDPOINT', 'https://generativelanguage.googleapis.com/
  * @return string|WP_Error The generated text content on success, or a WP_Error on failure.
  */
 function aicvb_call_gemini_api( string $prompt_text, array $generation_config = null, array $safety_settings = null ) {
-    $api_key = get_option( 'aicvb_gemini_api_key' );
+    $api_key = get_option( 'aicvb_gemini_api_key' ); // Option name remains for data continuity
 
     if ( empty( $api_key ) ) {
-        return new WP_Error( 'api_key_missing', __( 'Gemini API Key is not configured.', 'ai-cv-builder' ) );
+        return new WP_Error( 'api_key_missing', __( 'API Key is not configured.', 'ai-cv-builder' ) ); // Changed message
     }
 
     $api_url = AICVB_GEMINI_API_ENDPOINT . '?key=' . $api_key;
@@ -202,7 +202,7 @@ add_action('admin_notices', function() {
         $prompt = "Write a short story about a brave WordPress plugin.";
         $config = AICVB_DEFAULT_GENERATION_CONFIG;
         $safety = AICVB_DEFAULT_SAFETY_SETTINGS;
-
+        
         // To test JSON output, you could modify the prompt and expected response structure slightly
         // For example, asking for a JSON response.
         // $prompt = "Generate a JSON object with a field 'story_title' and 'story_body' for a short story about a brave WordPress plugin.";
@@ -259,14 +259,14 @@ function aicvb_shortcode_handler( $atts = [], $content = null ) {
     $output .= '<div style="text-align: right; margin-bottom: 10px;"><button id="aicvb-reset-cv-btn" class="button">' . __('Start New / Reset CV', 'ai-cv-builder') . '</button></div>';
     $output .= '<div id="aicvb-cv-builder-app-container">';
     $output .= '<h2>' . __( 'AI CV Builder', 'ai-cv-builder' ) . '</h2>';
-
+    
     $output .= '<div id="aicvb-cv-builder-app">';
-
+    
     // Initial Setup Form (will be hidden by JS once CV is generated/loaded)
     $output .= '<div id="aicvb-initial-setup-section">';
     $output .= '<h3>' . __( 'Start Your CV', 'ai-cv-builder' ) . '</h3>';
     $output .= '<form id="aicvb-initial-setup-form">';
-
+    
     $output .= '<p>' . __( 'Start by providing your desired job title or a full job description. AI will help create a foundational CV for you.', 'ai-cv-builder') . '</p>';
 
     $output .= '<div>';
@@ -287,7 +287,7 @@ function aicvb_shortcode_handler( $atts = [], $content = null ) {
     $output .= '<label for="aicvb-job-description">' . __( 'Job Description', 'ai-cv-builder' ) . '</label>';
     $output .= '<textarea id="aicvb-job-description" name="aicvb_job_description" rows="6" placeholder="' . __('Paste the full job description here...', 'ai-cv-builder') . '"></textarea>';
     $output .= '</div>';
-
+    
     $output .= '<button type="submit">' . __( 'Generate CV with AI', 'ai-cv-builder' ) . '</button>';
     $output .= '</form>';
     $output .= '</div>'; // #aicvb-initial-setup-section
@@ -337,9 +337,9 @@ function aicvb_handle_generate_initial_cv_ajax() {
         wp_send_json_error( ['message' => __( 'Input value cannot be empty.', 'ai-cv-builder' )], 400 );
         return;
     }
-
+    
     $api_key = get_option( 'aicvb_gemini_api_key' );
-    if (empty($api_key)) {
+    if (empty($api_key)) { // This check is actually redundant due to aicvb_call_gemini_api, but keep for direct calls if any.
          wp_send_json_error( ['message' => __( 'API Key is not configured.', 'ai-cv-builder' )], 500 );
         return;
     }
@@ -356,7 +356,7 @@ The CV should include:
 3.  Experience: One sample experience entry. Include 'jobTitle', 'company', 'location', 'startDate', 'endDate', and 2-3 'responsibilities' (bullet points).
 4.  Education: One sample education entry. Include 'degree', 'institution', 'location', 'graduationDate', and 1-2 'details'.
 5.  Skills: One skill entry with a 'category' and a 'skills' array with 3-4 relevant skills.
-Respond ONLY with a single JSON object matching this structure:
+Respond ONLY with a single JSON object matching this structure: 
 {\"personalInfo\": {\"name\": \"\", \"title\": \"\", ...}, \"summary\": \"\", \"experience\": [{\"jobTitle\": \"\", ...}], \"education\": [{\"degree\": \"\", ...}], \"skills\": [{\"category\": \"\", \"skills\": []}] }
 Ensure all string fields are populated appropriately based on the job title. Do not include 'id' fields.";
     } else { // 'description'
@@ -373,7 +373,7 @@ The CV MUST include:
 5.  Skills: One to two skill entries. Each with a 'category' and a 'skills' array with 3-5 skills directly extracted or inferred from the Job Description.
 Respond ONLY with a single JSON object matching the structure described above. Do not include 'id' fields.";
     }
-
+    
     // Configuration to request JSON output from Gemini API
     // This might vary based on the specific Gemini model being used.
     // Some models prefer this in `generationConfig`, others might infer from a well-structured prompt.
@@ -391,18 +391,18 @@ Respond ONLY with a single JSON object matching the structure described above. D
     $decoded_cv_data = json_decode( $api_response, true );
 
     if ( json_last_error() !== JSON_ERROR_NONE ) {
-        error_log("AI CV Builder - Failed to decode JSON from Gemini: " . json_last_error_msg() . " Raw response: " . $api_response);
+        error_log("AI CV Builder - Failed to decode JSON from API: " . json_last_error_msg() . " Raw response: " . $api_response); // Changed "from Gemini"
         wp_send_json_error( ['message' => __( 'Failed to parse AI response. The response was not valid JSON.', 'ai-cv-builder' ) . ' ' . json_last_error_msg() . $api_response], 500 );
         return;
     }
-
+    
     // Basic validation of structure (can be expanded)
     if (!isset($decoded_cv_data['personalInfo']) || !isset($decoded_cv_data['summary'])) {
-        error_log("AI CV Builder - Unexpected CV data structure from Gemini: " . $api_response);
+        error_log("AI CV Builder - Unexpected CV data structure from API: " . $api_response); // Changed "from Gemini"
         wp_send_json_error( ['message' => __( 'AI response has unexpected structure.', 'ai-cv-builder' )], 500 );
         return;
     }
-
+    
     // Add unique IDs to sections that need them (experience, education, skills)
     // This is important for managing them in the UI later.
     if (isset($decoded_cv_data['experience']) && is_array($decoded_cv_data['experience'])) {
