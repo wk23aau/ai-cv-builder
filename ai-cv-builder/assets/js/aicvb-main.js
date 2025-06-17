@@ -352,44 +352,84 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         } else if (target.classList.contains('aicvb-generate-ai-btn')) {
             const currentSectionKey = target.dataset.section;
-            const currentItemId = target.dataset.id;
-            const currentContext = target.dataset.context;
-            let promptData = { section_key: currentSectionKey, item_id: currentItemId, gen_context: currentContext };
+            const currentItemId = target.dataset.id; // Might be undefined for summary
+            const currentContext = target.dataset.context; // e.g., 'summary', 'responsibilities', 'details', 'skills'
 
-            if (currentSectionKey === 'summary') { /* existing context prep */ }
-            else if (currentSectionKey === 'experience' && currentItemId && currentContext === 'responsibilities') { /* existing context prep */ }
-            else if (currentSectionKey === 'education' && currentItemId && currentContext === 'details') { /* existing context prep */ }
-            else if (currentSectionKey === 'skills' && currentItemId && currentContext === 'skills') { /* existing context prep */ }
-            else { alert('AI for this context is not fully implemented.'); return; }
+            // Basic validation
+            if (!currentSectionKey || !currentContext) {
+                alert('Error: Missing section or context for AI generation.');
+                return;
+            }
+
+            // Prepare full_cv_data
+            const full_cv_data_json = JSON.stringify(cvData);
+
+            // Prepare item_data
+            let item_data_json = JSON.stringify({}); // Default to empty object string
+            if (currentItemId && cvData[currentSectionKey]) {
+                const item = cvData[currentSectionKey].find(i => i.id === currentItemId);
+                if (item) {
+                    item_data_json = JSON.stringify(item);
+                } else {
+                    console.warn(`Item with id ${currentItemId} not found in section ${currentSectionKey}. Proceeding without specific item_data.`);
+                }
+            } else if (currentSectionKey !== 'summary') { // Only warn if not summary and currentItemId is missing
+                 console.warn(`currentItemId not provided for section ${currentSectionKey} which typically requires it. Proceeding without specific item_data.`);
+            }
+
 
             const originalButtonText = target.textContent; target.disabled = true; target.textContent = 'Generating...';
+
             const formData = new FormData();
             formData.append('action', 'aicvb_generate_section_content');
             formData.append('nonce', aicvb_params.nonce);
-            for (const keyInPrompt in promptData) { formData.append(keyInPrompt, promptData[keyInPrompt]); }
+            formData.append('section_key', currentSectionKey);
+            formData.append('item_id', currentItemId || ''); // Send empty if not applicable
+            formData.append('gen_context', currentContext);
+            formData.append('full_cv_data', full_cv_data_json);
+            formData.append('item_data', item_data_json);
+
+            // Remove any previous error messages specific to this button's section/item
+            const existingError = target.closest('.aicvb-edit-form').querySelector('.aicvb-ai-error-message');
+            if (existingError) existingError.remove();
 
             fetch(aicvb_params.ajax_url, { method: 'POST', body: formData })
             .then(response => response.json())
             .then(data => {
                 target.disabled = false; target.textContent = originalButtonText;
-                if (data.success) {
-                    if (currentSectionKey === 'summary') cvData.summary = data.data.generated_content;
-                    else if (cvData[currentSectionKey] && currentItemId) {
+                if (data.success && data.data && data.data.generated_content) {
+                    if (currentSectionKey === 'summary') {
+                        cvData.summary = data.data.generated_content;
+                    } else if (currentItemId && cvData[currentSectionKey]) {
                         const itemIndex = cvData[currentSectionKey].findIndex(item => item.id === currentItemId);
-                        if (itemIndex !== -1 && data.data.generated_content) {
-                            if (currentContext === 'responsibilities' || currentContext === 'details' || currentContext === 'skills') {
-                                cvData[currentSectionKey][itemIndex][currentContext] = data.data.generated_content; // Assuming array
-                            }
+                        if (itemIndex !== -1) {
+                            // currentContext here will be 'responsibilities', 'details', or 'skills' (for the list of skills)
+                            // The backend is expected to return an array for these.
+                            cvData[currentSectionKey][itemIndex][currentContext] = data.data.generated_content;
+                        } else {
+                            console.error(`Item with id ${currentItemId} not found in section ${currentSectionKey} after AI generation.`);
+                            alert('Error: Could not find the item to update.');
+                            return;
                         }
+                    } else {
+                         alert('Error: Invalid section or item ID for updating.');
+                         return;
                     }
                     saveCvDataToLocalStorage();
-                    renderCvDisplayAndForms(cvData);
-                    alert('AI content generated and updated!');
+                    renderCvDisplayAndForms(cvData); // This will re-render everything
+                    alert('AI content generated and updated successfully!');
                 } else {
-                    alert('Error from AI: ' + (data.data.message || 'Unknown error'));
+                    const errorMessage = 'Error from AI: ' + (data.data && data.data.message ? data.data.message : 'Unknown error or empty content.');
+                    target.closest('.aicvb-edit-form').insertAdjacentHTML('beforeend', `<p class="aicvb-ai-error-message" style="color:red;font-size:0.9em;margin-top:5px;">${errorMessage}</p>`);
+                    // alert(errorMessage); // Replaced with inline message
                 }
             })
-            .catch(error => { target.disabled = false; target.textContent = originalButtonText; alert('Request failed: ' + error.message); });
+            .catch(error => {
+                target.disabled = false; target.textContent = originalButtonText;
+                const errorMessage = 'Request failed: ' + error.message;
+                target.closest('.aicvb-edit-form').insertAdjacentHTML('beforeend', `<p class="aicvb-ai-error-message" style="color:red;font-size:0.9em;margin-top:5px;">${errorMessage}</p>`);
+                // alert(errorMessage); // Replaced with inline message
+            });
         }
     });
 

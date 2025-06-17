@@ -421,3 +421,153 @@ Respond ONLY with a single JSON object matching the structure described above. D
 add_action( 'wp_ajax_aicvb_generate_initial_cv', 'aicvb_handle_generate_initial_cv_ajax' );
 // If you want to allow non-logged-in users (not typical for this kind of feature):
 // add_action( 'wp_ajax_nopriv_aicvb_generate_initial_cv', 'aicvb_handle_generate_initial_cv_ajax' );
+
+
+/**
+ * Handles AJAX request for generating content for a specific CV section item.
+ */
+function aicvb_handle_generate_section_content_ajax() {
+    // 1. Verify nonce
+    if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( $_POST['nonce'] ), 'aicvb_ajax_nonce' ) ) {
+        wp_send_json_error( ['message' => __( 'Nonce verification failed.', 'ai-cv-builder' )], 403 );
+        return;
+    }
+
+    // 2. Sanitize input parameters
+    $required_params = ['section_key', 'item_id', 'gen_context', 'item_data', 'full_cv_data'];
+    foreach ($required_params as $param) {
+        if ( ! isset( $_POST[$param] ) ) {
+            wp_send_json_error( ['message' => __( 'Missing parameter: ', 'ai-cv-builder' ) . $param], 400 );
+            return;
+        }
+    }
+
+    $section_key = sanitize_text_field( $_POST['section_key'] );
+    $item_id = sanitize_text_field( $_POST['item_id'] ); // Assuming item_id is a string like 'exp_xxxxx'
+    $gen_context = sanitize_text_field( $_POST['gen_context'] );
+
+    // item_data and full_cv_data are JSON strings, sanitize them carefully if needed, but json_decode will validate
+    // Using wp_kses_post or similar might be too aggressive if the JSON contains legitimate HTML-like characters
+    // For now, we rely on json_decode to validate and will sanitize the decoded data as needed.
+    $item_data_json = stripslashes( $_POST['item_data'] ); // stripslashes is important as WP adds them
+    $full_cv_data_json = stripslashes( $_POST['full_cv_data'] );
+
+    $item_data = json_decode( $item_data_json, true );
+    if ( json_last_error() !== JSON_ERROR_NONE ) {
+        wp_send_json_error( ['message' => __( 'Invalid item_data JSON: ', 'ai-cv-builder' ) . json_last_error_msg()], 400 );
+        return;
+    }
+
+    $full_cv_data = json_decode( $full_cv_data_json, true );
+    if ( json_last_error() !== JSON_ERROR_NONE ) {
+        wp_send_json_error( ['message' => __( 'Invalid full_cv_data JSON: ', 'ai-cv-builder' ) . json_last_error_msg()], 400 );
+        return;
+    }
+
+    // 3. Construct prompt based on section_key and gen_context
+    $prompt_text = "";
+    $generation_config = AICVB_DEFAULT_GENERATION_CONFIG; // Start with default
+
+    switch ( $section_key ) {
+        case 'summary':
+            // gen_context might not be relevant for summary, or could be 'overall'
+            $prompt_text = "Based on the following CV data:\n" .
+                           json_encode($full_cv_data, JSON_PRETTY_PRINT) . "\n\n" .
+                           "Generate a concise and compelling professional summary (2-3 sentences).";
+            // Plain text is fine for summary
+            break;
+
+        case 'experience':
+            $job_title = isset($item_data['jobTitle']) ? sanitize_text_field($item_data['jobTitle']) : 'the role';
+            $company_name = isset($item_data['company']) ? sanitize_text_field($item_data['company']) : 'the company';
+            if ( $gen_context === 'responsibilities' ) {
+                $prompt_text = "For the job title \"$job_title\" at \"$company_name\", generate 3-4 distinct key responsibilities or achievements as a JSON array of strings. " .
+                               "Each responsibility should be concise and action-oriented. " .
+                               "Example: [\"Developed new features for the company website.\", \"Managed a team of 5 engineers.\"]\n" .
+                               "CV Context (for overall tone and style):\n" . json_encode($full_cv_data['summary'], JSON_PRETTY_PRINT) . "\n" . // Provide summary for context
+                               "Respond ONLY with the JSON array of strings.";
+                $generation_config['responseMimeType'] = 'application/json';
+            } else {
+                wp_send_json_error( ['message' => __( 'Invalid gen_context for experience: ', 'ai-cv-builder' ) . $gen_context], 400 );
+                return;
+            }
+            break;
+
+        case 'education':
+            $degree = isset($item_data['degree']) ? sanitize_text_field($item_data['degree']) : 'the qualification';
+            $institution = isset($item_data['institution']) ? sanitize_text_field($item_data['institution']) : 'the institution';
+            if ( $gen_context === 'details' ) {
+                $prompt_text = "For the degree \"$degree\" from \"$institution\", generate 1-2 academic details, projects, or achievements as a JSON array of strings. " .
+                               "These should be concise and highlight relevant accomplishments. " .
+                               "Example: [\"Graduated with Honors (GPA 3.8/4.0)\", \"Led a capstone project on renewable energy solutions.\"]\n" .
+                               "CV Context (for overall tone and style):\n" . json_encode($full_cv_data['summary'], JSON_PRETTY_PRINT) . "\n" .
+                               "Respond ONLY with the JSON array of strings.";
+                $generation_config['responseMimeType'] = 'application/json';
+            } else {
+                wp_send_json_error( ['message' => __( 'Invalid gen_context for education: ', 'ai-cv-builder' ) . $gen_context], 400 );
+                return;
+            }
+            break;
+
+        case 'skills':
+            $category_name = isset($item_data['category']) ? sanitize_text_field($item_data['category']) : 'this skill category';
+            if ( $gen_context === 'skills' ) { // This context might seem redundant, but good for clarity
+                $prompt_text = "For the skills category \"$category_name\", suggest 3-4 relevant skills as a JSON array of strings. " .
+                               "Consider skills that would complement a CV with the following summary:\n" . json_encode($full_cv_data['summary'], JSON_PRETTY_PRINT) . "\n" .
+                               "Example: [\"Python\", \"JavaScript\", \"Project Management\", \"Agile Methodologies\"]\n" .
+                               "Respond ONLY with the JSON array of strings.";
+                $generation_config['responseMimeType'] = 'application/json';
+            } else {
+                wp_send_json_error( ['message' => __( 'Invalid gen_context for skills: ', 'ai-cv-builder' ) . $gen_context], 400 );
+                return;
+            }
+            break;
+
+        default:
+            wp_send_json_error( ['message' => __( 'Invalid section_key: ', 'ai-cv-builder' ) . $section_key], 400 );
+            return;
+    }
+
+    if ( empty( $prompt_text ) ) {
+        wp_send_json_error( ['message' => __( 'Failed to generate prompt.', 'ai-cv-builder' )], 500 );
+        return;
+    }
+
+    // 5. Call aicvb_call_gemini_api
+    $api_response = aicvb_call_gemini_api( $prompt_text, $generation_config, AICVB_DEFAULT_SAFETY_SETTINGS );
+
+    if ( is_wp_error( $api_response ) ) {
+        wp_send_json_error( ['message' => $api_response->get_error_message()], 500 );
+        return;
+    }
+
+    // 6. Process API response
+    $generated_content = null;
+    if (isset($generation_config['responseMimeType']) && $generation_config['responseMimeType'] === 'application/json') {
+        $decoded_response = json_decode( $api_response, true );
+        if ( json_last_error() !== JSON_ERROR_NONE ) {
+            // Attempt to clean the response: sometimes the API might return JSON wrapped in ```json ... ```
+            $cleaned_response = preg_replace('/^```json\s*(.*)\s*```$/s', '$1', $api_response);
+            $decoded_response = json_decode( $cleaned_response, true );
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                error_log("AI CV Builder - Failed to decode JSON from section content API: " . json_last_error_msg() . " Raw response: " . $api_response);
+                wp_send_json_error( ['message' => __( 'Failed to parse AI response as JSON. Raw: ', 'ai-cv-builder' ) . $api_response ], 500 );
+                return;
+            }
+        }
+        $generated_content = $decoded_response; // This should be an array (e.g., of responsibilities or skills)
+    } else {
+        $generated_content = $api_response; // Plain text (e.g., for summary)
+    }
+
+    if (empty($generated_content)) {
+        wp_send_json_error( ['message' => __( 'AI returned empty content.', 'ai-cv-builder' )], 500 );
+        return;
+    }
+
+    // 7. Return generated content
+    wp_send_json_success( ['generated_content' => $generated_content] );
+}
+add_action( 'wp_ajax_aicvb_generate_section_content', 'aicvb_handle_generate_section_content_ajax' );
+// add_action( 'wp_ajax_nopriv_aicvb_generate_section_content', 'aicvb_handle_generate_section_content_ajax' ); // If needed
